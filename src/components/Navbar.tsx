@@ -1,16 +1,19 @@
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { BookOpen, Sparkles, Users } from "lucide-react";
+import { BookOpen, Sparkles, Users, LogOut, Library } from "lucide-react";
 import { useState } from "react";
+import { useAuth } from "@/contexts/AuthContext";
 
 const Navbar = () => {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const { user, signOut } = useAuth();
 
   const links = [
     { to: "/", label: "Home", icon: BookOpen },
     { to: "/create", label: "Create", icon: Sparkles },
     { to: "/gallery", label: "Gallery", icon: Users },
+    ...(user ? [{ to: "/my-manuals", label: "My Manuals", icon: Library }] : []),
   ];
 
   return (
@@ -39,8 +42,26 @@ const Navbar = () => {
         </div>
 
         <div className="hidden md:flex items-center gap-2">
-          <Button variant="outline" size="sm">Log In</Button>
-          <Button size="sm">Sign Up</Button>
+          {user ? (
+            <>
+              <span className="text-sm text-muted-foreground font-body">
+                {user.email}
+              </span>
+              <Button variant="outline" size="sm" onClick={signOut} className="gap-1">
+                <LogOut className="w-4 h-4" />
+                Sign Out
+              </Button>
+            </>
+          ) : (
+            <>
+              <Link to="/auth">
+                <Button variant="outline" size="sm">Log In</Button>
+              </Link>
+              <Link to="/auth">
+                <Button size="sm">Sign Up</Button>
+              </Link>
+            </>
+          )}
         </div>
 
         <button
@@ -71,8 +92,21 @@ const Navbar = () => {
             </Link>
           ))}
           <div className="flex gap-2 pt-2">
-            <Button variant="outline" className="flex-1">Log In</Button>
-            <Button className="flex-1">Sign Up</Button>
+            {user ? (
+              <Button variant="outline" className="flex-1" onClick={signOut}>
+                <LogOut className="w-4 h-4 mr-1" />
+                Sign Out
+              </Button>
+            ) : (
+              <>
+                <Link to="/auth" className="flex-1" onClick={() => setMobileOpen(false)}>
+                  <Button variant="outline" className="w-full">Log In</Button>
+                </Link>
+                <Link to="/auth" className="flex-1" onClick={() => setMobileOpen(false)}>
+                  <Button className="w-full">Sign Up</Button>
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}

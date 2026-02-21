@@ -14,6 +14,7 @@ interface ManualPage {
   instructions: string;
   partsNeeded: string[];
   tip?: string;
+  imageUrl?: string;
 }
 
 interface Manual {
@@ -90,6 +91,7 @@ const ManualView = () => {
               <div class="step-number">${page.pageNumber}</div>
               <div class="page-title">${page.title}</div>
             </div>
+            ${page.imageUrl ? `<div style="margin-bottom: 16px; border-radius: 8px; overflow: hidden;"><img src="${page.imageUrl}" alt="Step ${page.pageNumber}" style="width: 100%; height: auto;" /></div>` : ''}
             <div class="instructions">${page.instructions}</div>
             <div class="parts">
               <h4>🔧 Parts Needed:</h4>
@@ -203,6 +205,17 @@ const ManualView = () => {
                       </div>
                       <h2 className="font-heading font-bold text-xl text-foreground">{page.title}</h2>
                     </div>
+
+                    {page.imageUrl && (
+                      <div className="mb-4 rounded-xl overflow-hidden border border-border">
+                        <img
+                          src={page.imageUrl}
+                          alt={`Step ${page.pageNumber}: ${page.title}`}
+                          className="w-full h-auto"
+                          loading="lazy"
+                        />
+                      </div>
+                    )}
 
                     <p className="text-foreground leading-relaxed mb-4">{page.instructions}</p>
 

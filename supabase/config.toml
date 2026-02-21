@@ -11,3 +11,6 @@ verify_jwt = false
 
 [functions.generate-manual]
 verify_jwt = false
+
+[functions.regenerate-step-image]
+verify_jwt = false

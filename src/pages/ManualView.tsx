@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
-import { Download, ArrowLeft, Loader2 } from "lucide-react";
+import { Download, ArrowLeft, Loader2, RefreshCw } from "lucide-react";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
@@ -31,6 +31,7 @@ const ManualView = () => {
   const { id } = useParams();
   const [manual, setManual] = useState<Manual | null>(null);
   const [loading, setLoading] = useState(true);
+  const [regeneratingPage, setRegeneratingPage] = useState<number | null>(null);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -51,6 +52,37 @@ const ManualView = () => {
 
     fetchManual();
   }, [id]);
+
+  const handleRegenerateImage = async (pageNumber: number) => {
+    if (!manual) return;
+    setRegeneratingPage(pageNumber);
+    try {
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+        toast({ title: "Error", description: "Please log in to regenerate images.", variant: "destructive" });
+        return;
+      }
+      const { data, error } = await supabase.functions.invoke("regenerate-step-image", {
+        body: { manualId: manual.id, pageNumber },
+      });
+      if (error) throw error;
+      if (data?.imageUrl) {
+        setManual(prev => {
+          if (!prev?.content?.pages) return prev;
+          const updatedPages = prev.content.pages.map(p =>
+            p.pageNumber === pageNumber ? { ...p, imageUrl: data.imageUrl } : p
+          );
+          return { ...prev, content: { ...prev.content, pages: updatedPages } };
+        });
+        toast({ title: "Image regenerated!", description: `Step ${pageNumber} image has been updated.` });
+      }
+    } catch (err: any) {
+      console.error("Regenerate error:", err);
+      toast({ title: "Regeneration failed", description: err.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setRegeneratingPage(null);
+    }
+  };
 
   const handleDownloadPDF = () => {
     if (!manual?.content?.pages) return;
@@ -207,14 +239,37 @@ const ManualView = () => {
                     </div>
 
                     {page.imageUrl && (
-                      <div className="mb-4 rounded-xl overflow-hidden border border-border">
+                      <div className="mb-4 rounded-xl overflow-hidden border border-border relative group">
                         <img
                           src={page.imageUrl}
                           alt={`Step ${page.pageNumber}: ${page.title}`}
                           className="w-full h-auto"
                           loading="lazy"
                         />
+                        <Button
+                          size="sm"
+                          variant="secondary"
+                          className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity gap-1"
+                          onClick={() => handleRegenerateImage(page.pageNumber)}
+                          disabled={regeneratingPage === page.pageNumber}
+                        >
+                          <RefreshCw className={`w-3 h-3 ${regeneratingPage === page.pageNumber ? 'animate-spin' : ''}`} />
+                          {regeneratingPage === page.pageNumber ? "Regenerating..." : "Regenerate"}
+                        </Button>
                       </div>
+                    )}
+
+                    {!page.imageUrl && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="mb-4 gap-1"
+                        onClick={() => handleRegenerateImage(page.pageNumber)}
+                        disabled={regeneratingPage === page.pageNumber}
+                      >
+                        <RefreshCw className={`w-3 h-3 ${regeneratingPage === page.pageNumber ? 'animate-spin' : ''}`} />
+                        {regeneratingPage === page.pageNumber ? "Generating..." : "Generate Image"}
+                      </Button>
                     )}
 
                     <p className="text-foreground leading-relaxed mb-4">{page.instructions}</p>

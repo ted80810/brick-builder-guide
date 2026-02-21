@@ -264,13 +264,16 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions. Return
       .update({ content, status: "completed" })
       .eq("id", manualId);
 
-    // Update pages used in subscription
-    await supabase.rpc("increment_pages_used", {
-      p_user_id: userData.user.id,
-      p_pages: manual.page_count,
-    }).catch(() => {
+    // Update pages used in subscription (best effort)
+    try {
+      const { error: rpcError } = await supabase.rpc("increment_pages_used", {
+        p_user_id: userData.user.id,
+        p_pages: manual.page_count,
+      });
+      if (rpcError) console.log("increment_pages_used RPC not available:", rpcError.message);
+    } catch {
       console.log("increment_pages_used RPC not available");
-    });
+    }
 
     return new Response(JSON.stringify({ success: true, content }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },

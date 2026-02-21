@@ -6,6 +6,82 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+async function generateStepImage(
+  title: string,
+  instructions: string,
+  partsNeeded: string[],
+  manualTitle: string,
+  apiKey: string
+): Promise<string | null> {
+  try {
+    const prompt = `Create a clean, simple LEGO building instruction diagram for step: "${title}" of a "${manualTitle}" LEGO set. 
+Show the LEGO bricks being assembled: ${instructions}
+Parts used: ${partsNeeded.join(", ")}
+Style: Clean technical illustration, isometric view, white background, colorful LEGO bricks, minimal text, similar to official LEGO instruction manuals. Show arrows indicating where pieces connect.`;
+
+    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: "google/gemini-2.5-flash-image",
+        messages: [{ role: "user", content: prompt }],
+        modalities: ["image", "text"],
+      }),
+    });
+
+    if (!response.ok) {
+      console.error("Image generation failed:", response.status);
+      return null;
+    }
+
+    const result = await response.json();
+    const imageData = result.choices?.[0]?.message?.images?.[0]?.image_url?.url;
+    return imageData || null;
+  } catch (error) {
+    console.error("Image generation error:", error);
+    return null;
+  }
+}
+
+async function uploadImageToStorage(
+  supabase: any,
+  base64Data: string,
+  manualId: string,
+  pageNumber: number
+): Promise<string | null> {
+  try {
+    // Extract base64 content (remove data:image/png;base64, prefix)
+    const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, "");
+    const binaryData = Uint8Array.from(atob(base64Content), (c) => c.charCodeAt(0));
+
+    const filePath = `${manualId}/step-${pageNumber}.png`;
+
+    const { error } = await supabase.storage
+      .from("manual-images")
+      .upload(filePath, binaryData, {
+        contentType: "image/png",
+        upsert: true,
+      });
+
+    if (error) {
+      console.error("Storage upload error:", error);
+      return null;
+    }
+
+    const { data: urlData } = supabase.storage
+      .from("manual-images")
+      .getPublicUrl(filePath);
+
+    return urlData?.publicUrl || null;
+  } catch (error) {
+    console.error("Upload error:", error);
+    return null;
+  }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -26,7 +102,6 @@ serve(async (req) => {
     const { manualId } = await req.json();
     if (!manualId) throw new Error("manualId is required");
 
-    // Get the manual
     const { data: manual, error: manualError } = await supabase
       .from("manuals")
       .select("*")
@@ -36,12 +111,12 @@ serve(async (req) => {
 
     if (manualError || !manual) throw new Error("Manual not found");
 
-    // Update status to generating
     await supabase.from("manuals").update({ status: "generating" }).eq("id", manualId);
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
+    // --- Step 1: Generate text instructions ---
     const systemPrompt = `You are a LEGO instruction manual creator. Generate detailed step-by-step building instructions for a LEGO Creator set model.
 
 Your output must be a valid JSON object with this structure:
@@ -147,13 +222,43 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions. Return
     if (toolCall) {
       content = JSON.parse(toolCall.function.arguments);
     } else {
-      // Fallback: try parsing from content
       const text = aiResult.choices?.[0]?.message?.content || "";
       const jsonMatch = text.match(/\{[\s\S]*\}/);
       content = jsonMatch ? JSON.parse(jsonMatch[0]) : { pages: [] };
     }
 
-    // Update manual with generated content
+    // --- Step 2: Generate images for each step ---
+    console.log(`Generating images for ${content.pages.length} steps...`);
+
+    for (const page of content.pages) {
+      try {
+        const base64Image = await generateStepImage(
+          page.title,
+          page.instructions,
+          page.partsNeeded,
+          manual.title,
+          LOVABLE_API_KEY
+        );
+
+        if (base64Image) {
+          const publicUrl = await uploadImageToStorage(
+            supabase,
+            base64Image,
+            manualId,
+            page.pageNumber
+          );
+          if (publicUrl) {
+            page.imageUrl = publicUrl;
+            console.log(`Image generated for step ${page.pageNumber}`);
+          }
+        }
+      } catch (imgError) {
+        console.error(`Image generation failed for step ${page.pageNumber}:`, imgError);
+        // Continue without image - not critical
+      }
+    }
+
+    // Update manual with generated content (including image URLs)
     await supabase
       .from("manuals")
       .update({ content, status: "completed" })
@@ -164,7 +269,6 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions. Return
       p_user_id: userData.user.id,
       p_pages: manual.page_count,
     }).catch(() => {
-      // RPC may not exist yet, not critical
       console.log("increment_pages_used RPC not available");
     });
 

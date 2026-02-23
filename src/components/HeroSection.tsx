@@ -42,7 +42,7 @@ const HeroSection = () => {
             <div className="flex items-center gap-6 mt-10 text-sm text-muted-foreground">
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-brick-green" />
-                Free for small manuals
+                Free small manuals
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-2 h-2 rounded-full bg-accent" />

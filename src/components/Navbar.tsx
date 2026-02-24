@@ -20,8 +20,8 @@ const Navbar = () => {
     <nav className="sticky top-0 z-50 bg-card/90 backdrop-blur-md border-b border-border">
       <div className="container mx-auto flex items-center justify-between h-16 px-4">
         <Link to="/" className="flex items-center gap-2">
-          <div className="w-8 h-8 rounded-md bg-primary flex items-center justify-center shadow-brick">
-            <span className="text-primary-foreground font-heading font-bold text-sm">B</span>
+          <div className="w-8 h-8 rounded-md bg-brick-green flex items-center justify-center shadow-brick">
+            <span className="text-brick-green-foreground font-heading font-bold text-sm">B</span>
           </div>
           <span className="font-heading font-bold text-xl text-foreground">BrickBooks</span>
         </Link>

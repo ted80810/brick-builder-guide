@@ -14,7 +14,7 @@ const HeroSection = () => {
             animate={{ opacity: 1, x: 0 }}
             transition={{ duration: 0.6 }}
           >
-            <div className="inline-flex items-center gap-2 bg-secondary/80 text-secondary-foreground px-4 py-1.5 rounded-full text-sm font-medium mb-6">
+            <div className="inline-flex items-center gap-2 bg-brick-green/15 text-brick-green border border-brick-green/30 px-4 py-1.5 rounded-full text-sm font-medium mb-6">
               <Sparkles className="w-4 h-4" />
               AI-Powered Manual Creator
             </div>
@@ -71,7 +71,7 @@ const HeroSection = () => {
             <motion.div
               animate={{ y: [0, -10, 0] }}
               transition={{ duration: 3, repeat: Infinity, ease: "easeInOut" }}
-              className="absolute -top-4 -right-4 bg-primary text-primary-foreground rounded-xl px-4 py-2 shadow-brick font-heading font-bold text-sm"
+              className="absolute -top-4 -right-4 bg-brick-green text-brick-green-foreground rounded-xl px-4 py-2 shadow-brick font-heading font-bold text-sm"
             >
               ✨ AI Generated
             </motion.div>

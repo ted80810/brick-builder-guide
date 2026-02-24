@@ -57,11 +57,11 @@ const Index = () => {
                 transition={{ delay: i * 0.15 }}
                 className="text-center"
               >
-                <div className="w-16 h-16 rounded-2xl bg-primary/10 flex items-center justify-center mx-auto mb-5">
-                  <feature.icon className="w-7 h-7 text-primary" />
+                <div className="w-16 h-16 rounded-2xl bg-brick-green/10 flex items-center justify-center mx-auto mb-5">
+                  <feature.icon className="w-7 h-7 text-brick-green" />
                 </div>
                 <div className="flex items-center justify-center mb-3">
-                  <span className="w-8 h-8 rounded-full bg-secondary text-secondary-foreground font-heading font-bold text-sm flex items-center justify-center mr-2">
+                  <span className="w-8 h-8 rounded-full bg-brick-green text-brick-green-foreground font-heading font-bold text-sm flex items-center justify-center mr-2">
                     {i + 1}
                   </span>
                   <h3 className="font-heading font-bold text-lg text-foreground">{feature.title}</h3>

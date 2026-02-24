@@ -1,13 +1,15 @@
 import { Link, useLocation } from "react-router-dom";
 import { Button } from "@/components/ui/button";
-import { BookOpen, Sparkles, Users, LogOut, Library } from "lucide-react";
+import { BookOpen, Sparkles, Users, LogOut, Library, Moon, Sun } from "lucide-react";
 import { useState } from "react";
 import { useAuth } from "@/contexts/AuthContext";
+import { useTheme } from "@/hooks/use-theme";
 
 const Navbar = () => {
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const { user, signOut } = useAuth();
+  const { theme, toggleTheme } = useTheme();
 
   const links = [
     { to: "/", label: "Home", icon: BookOpen },
@@ -42,6 +44,9 @@ const Navbar = () => {
         </div>
 
         <div className="hidden md:flex items-center gap-2">
+          <Button variant="ghost" size="icon" onClick={toggleTheme} className="mr-1">
+            {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </Button>
           {user ? (
             <>
               <span className="text-sm text-muted-foreground font-body">
@@ -92,6 +97,9 @@ const Navbar = () => {
             </Link>
           ))}
           <div className="flex gap-2 pt-2">
+            <Button variant="ghost" size="icon" onClick={toggleTheme}>
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </Button>
             {user ? (
               <Button variant="outline" className="flex-1" onClick={signOut}>
                 <LogOut className="w-4 h-4 mr-1" />

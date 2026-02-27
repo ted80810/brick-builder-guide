@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
-import { Eye, FileText } from "lucide-react";
-import { Link } from "react-router-dom";
+import { Eye, FileText, Shuffle } from "lucide-react";
+import { Link, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
@@ -16,12 +16,12 @@ interface Manual {
   description: string;
   page_count: number;
   created_at: string;
-  profiles?: { display_name: string | null } | null;
 }
 
 const CommunityGallery = ({ showAll = false }: { showAll?: boolean }) => {
   const [manuals, setManuals] = useState<Manual[]>([]);
   const [loading, setLoading] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
     const fetchManuals = async () => {
@@ -32,28 +32,31 @@ const CommunityGallery = ({ showAll = false }: { showAll?: boolean }) => {
         .eq("status", "completed")
         .order("created_at", { ascending: false });
 
-      if (!showAll) {
-        query.limit(6);
-      }
+      if (!showAll) query.limit(6);
 
       const { data, error } = await query;
-      if (!error && data) {
-        setManuals(data);
-      }
+      if (!error && data) setManuals(data);
       setLoading(false);
     };
-
     fetchManuals();
   }, [showAll]);
 
-  // If no real manuals yet, show placeholder data
   const placeholderManuals = [
-    { id: "demo-1", title: "Enchanted Castle", description: "A magical castle", page_count: 8, created_at: "", author: "BrickMaster42" },
-    { id: "demo-2", title: "Galaxy Cruiser", description: "Space ship", page_count: 6, created_at: "", author: "SpaceFan99" },
-    { id: "demo-3", title: "Mech Warrior Bot", description: "Robot mech", page_count: 9, created_at: "", author: "RoboBuilder" },
+    { id: "demo-1", title: "Enchanted Castle", description: "A magical castle", page_count: 8, created_at: "" },
+    { id: "demo-2", title: "Galaxy Cruiser", description: "Space ship", page_count: 6, created_at: "" },
+    { id: "demo-3", title: "Mech Warrior Bot", description: "Robot mech", page_count: 9, created_at: "" },
   ];
 
   const displayed = manuals.length > 0 ? manuals : placeholderManuals;
+
+  const handleRemix = (manual: Manual) => {
+    const params = new URLSearchParams({
+      remix: manual.id,
+      title: manual.title,
+      desc: manual.description,
+    });
+    navigate(`/create?${params.toString()}`);
+  };
 
   return (
     <section className="py-20">
@@ -101,20 +104,33 @@ const CommunityGallery = ({ showAll = false }: { showAll?: boolean }) => {
                 <div className="p-5">
                   <h3 className="font-heading font-bold text-lg text-foreground mb-1">{project.title}</h3>
                   <p className="text-muted-foreground text-sm mb-3 line-clamp-2">{project.description}</p>
-                  <div className="flex items-center justify-end">
-                    {project.id.startsWith("demo-") ? (
-                      <Button variant="ghost" size="sm" className="gap-1" disabled>
-                        <Eye className="w-4 h-4" />
-                        Demo
+                  <div className="flex items-center justify-between">
+                    {!project.id.startsWith("demo-") && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="gap-1 text-brick-green hover:text-brick-green"
+                        onClick={() => handleRemix(project)}
+                      >
+                        <Shuffle className="w-3.5 h-3.5" />
+                        Remix
                       </Button>
-                    ) : (
-                      <Link to={`/manual/${project.id}`}>
-                        <Button variant="ghost" size="sm" className="gap-1">
-                          <Eye className="w-4 h-4" />
-                          View Manual
-                        </Button>
-                      </Link>
                     )}
+                    <div className="ml-auto">
+                      {project.id.startsWith("demo-") ? (
+                        <Button variant="ghost" size="sm" className="gap-1" disabled>
+                          <Eye className="w-4 h-4" />
+                          Demo
+                        </Button>
+                      ) : (
+                        <Link to={`/manual/${project.id}`}>
+                          <Button variant="ghost" size="sm" className="gap-1">
+                            <Eye className="w-4 h-4" />
+                            View
+                          </Button>
+                        </Link>
+                      )}
+                    </div>
                   </div>
                 </div>
               </motion.div>

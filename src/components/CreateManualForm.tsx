@@ -2,15 +2,34 @@ import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Sparkles, FileText, AlertCircle, Loader2 } from "lucide-react";
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { Slider } from "@/components/ui/slider";
+
+const DIFFICULTY_LABELS = ["Beginner", "Intermediate", "Advanced"] as const;
+const STYLE_PRESETS = [
+  { id: "classic", label: "Classic", emoji: "🧱" },
+  { id: "retro", label: "Retro", emoji: "📺" },
+  { id: "futuristic", label: "Futuristic", emoji: "🚀" },
+  { id: "minimalist", label: "Minimalist", emoji: "◻️" },
+  { id: "detailed", label: "Detailed", emoji: "🔍" },
+  { id: "whimsical", label: "Whimsical", emoji: "🎪" },
+] as const;
 
 const CreateManualForm = () => {
-  const [idea, setIdea] = useState("");
+  const [searchParams] = useSearchParams();
+  const remixFrom = searchParams.get("remix");
+  const remixTitle = searchParams.get("title") || "";
+  const remixDesc = searchParams.get("desc") || "";
+
+  const [idea, setIdea] = useState(remixDesc);
   const [pages, setPages] = useState<string>("5");
-  const [title, setTitle] = useState("");
+  const [title, setTitle] = useState(remixFrom ? `Remix: ${remixTitle}` : "");
+  const [difficulty, setDifficulty] = useState(0); // 0=beginner, 1=intermediate, 2=advanced
+  const [pieceTarget, setPieceTarget] = useState<string>("");
+  const [style, setStyle] = useState<string>("classic");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { user, subscription } = useAuth();
   const navigate = useNavigate();
@@ -37,7 +56,6 @@ const CreateManualForm = () => {
     setIsSubmitting(true);
 
     try {
-      // Create manual record
       const { data: manual, error: insertError } = await supabase
         .from("manuals")
         .insert({
@@ -53,9 +71,13 @@ const CreateManualForm = () => {
 
       if (insertError) throw insertError;
 
-      // Call generate function
       const { data, error } = await supabase.functions.invoke("generate-manual", {
-        body: { manualId: manual.id },
+        body: {
+          manualId: manual.id,
+          difficulty: DIFFICULTY_LABELS[difficulty],
+          pieceTarget: pieceTarget ? parseInt(pieceTarget) : null,
+          style,
+        },
       });
 
       if (error) throw error;
@@ -78,6 +100,7 @@ const CreateManualForm = () => {
         onSubmit={handleSubmit}
         className="bg-card rounded-2xl p-8 shadow-card space-y-6"
       >
+        {/* Title */}
         <div>
           <label className="block font-heading font-semibold text-foreground mb-2">
             Manual Title
@@ -92,6 +115,7 @@ const CreateManualForm = () => {
           />
         </div>
 
+        {/* Description */}
         <div>
           <label className="block font-heading font-semibold text-foreground mb-2">
             Describe Your Build Idea
@@ -106,6 +130,70 @@ const CreateManualForm = () => {
           />
         </div>
 
+        {/* Difficulty Slider */}
+        <div>
+          <label className="block font-heading font-semibold text-foreground mb-2">
+            Difficulty Level
+          </label>
+          <div className="flex items-center gap-4">
+            <Slider
+              value={[difficulty]}
+              onValueChange={([v]) => setDifficulty(v)}
+              max={2}
+              step={1}
+              className="flex-1"
+            />
+            <span className={`text-sm font-heading font-semibold px-3 py-1 rounded-full ${
+              difficulty === 0 ? "bg-brick-green/20 text-brick-green" :
+              difficulty === 1 ? "bg-secondary/30 text-secondary-foreground" :
+              "bg-primary/20 text-primary"
+            }`}>
+              {DIFFICULTY_LABELS[difficulty]}
+            </span>
+          </div>
+        </div>
+
+        {/* Piece Count Target */}
+        <div>
+          <label className="block font-heading font-semibold text-foreground mb-2">
+            Piece Count Target <span className="text-muted-foreground font-normal text-sm">(optional)</span>
+          </label>
+          <input
+            type="number"
+            min="10"
+            max="5000"
+            value={pieceTarget}
+            onChange={(e) => setPieceTarget(e.target.value)}
+            placeholder="e.g., 200 — leave blank for no limit"
+            className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring font-body"
+          />
+        </div>
+
+        {/* Style Presets */}
+        <div>
+          <label className="block font-heading font-semibold text-foreground mb-2">
+            Style Preset
+          </label>
+          <div className="grid grid-cols-3 sm:grid-cols-6 gap-2">
+            {STYLE_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                type="button"
+                onClick={() => setStyle(preset.id)}
+                className={`flex flex-col items-center gap-1 p-3 rounded-xl border-2 transition-all text-sm font-heading font-medium ${
+                  style === preset.id
+                    ? "border-brick-green bg-brick-green/10 text-foreground"
+                    : "border-border bg-background text-muted-foreground hover:border-muted-foreground/40"
+                }`}
+              >
+                <span className="text-lg">{preset.emoji}</span>
+                {preset.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Page Count */}
         <div>
           <label className="block font-heading font-semibold text-foreground mb-2">
             Number of Pages
@@ -121,6 +209,7 @@ const CreateManualForm = () => {
           />
         </div>
 
+        {/* Free / Paid indicator */}
         <div className={`flex items-start gap-3 p-4 rounded-xl ${isFree ? "bg-brick-green/10" : "bg-secondary/50"}`}>
           {isFree ? (
             <>

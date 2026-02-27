@@ -53,18 +53,13 @@ async function uploadImageToStorage(
   pageNumber: number
 ): Promise<string | null> {
   try {
-    // Extract base64 content (remove data:image/png;base64, prefix)
     const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, "");
     const binaryData = Uint8Array.from(atob(base64Content), (c) => c.charCodeAt(0));
-
     const filePath = `${manualId}/step-${pageNumber}.png`;
 
     const { error } = await supabase.storage
       .from("manual-images")
-      .upload(filePath, binaryData, {
-        contentType: "image/png",
-        upsert: true,
-      });
+      .upload(filePath, binaryData, { contentType: "image/png", upsert: true });
 
     if (error) {
       console.error("Storage upload error:", error);
@@ -99,7 +94,7 @@ serve(async (req) => {
     const { data: userData, error: authError } = await supabase.auth.getUser(token);
     if (authError || !userData.user) throw new Error("Not authenticated");
 
-    const { manualId } = await req.json();
+    const { manualId, difficulty, pieceTarget, style } = await req.json();
     if (!manualId) throw new Error("manualId is required");
 
     const { data: manual, error: manualError } = await supabase
@@ -116,35 +111,66 @@ serve(async (req) => {
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
-    // --- Step 1: Generate text instructions ---
+    const difficultyLevel = difficulty || "Beginner";
+    const stylePreset = style || "classic";
+    const pieceConstraint = pieceTarget ? `\nIMPORTANT: The total build should use approximately ${pieceTarget} pieces or fewer. Keep the parts list realistic and shoppable.` : "";
+
+    const styleDescriptions: Record<string, string> = {
+      classic: "Traditional LEGO style with bright primary colors",
+      retro: "Vintage/retro aesthetic with muted tones and nostalgic feel",
+      futuristic: "Sleek sci-fi design with metallic and neon accents",
+      minimalist: "Clean and simple design using minimal pieces and colors",
+      detailed: "Highly detailed and intricate design with lots of fine details",
+      whimsical: "Playful and imaginative design with unexpected elements",
+    };
+
     const systemPrompt = `You are a LEGO instruction manual creator. Generate detailed step-by-step building instructions for a LEGO Creator set model.
+
+Difficulty level: ${difficultyLevel}
+Style: ${styleDescriptions[stylePreset] || styleDescriptions.classic}
+${pieceConstraint}
 
 Your output must be a valid JSON object with this structure:
 {
-  "pages": [
+  "difficulty": "${difficultyLevel}",
+  "style": "${stylePreset}",
+  "estimatedPieceCount": <number>,
+  "sections": [
     {
-      "pageNumber": 1,
-      "title": "Step title",
-      "instructions": "Detailed building instructions for this step",
-      "partsNeeded": ["list of LEGO parts needed for this step"],
-      "tip": "Optional building tip"
+      "sectionTitle": "Section name (e.g., Base, Walls, Roof)",
+      "pages": [
+        {
+          "pageNumber": 1,
+          "title": "Step title",
+          "instructions": "Detailed building instructions for this step",
+          "partsNeeded": [{"part": "2x4 Brick", "color": "Red", "quantity": 3}],
+          "tip": "Optional building tip"
+        }
+      ]
     }
+  ],
+  "partsList": [
+    {"part": "2x4 Brick", "color": "Red", "quantity": 8}
   ]
 }
 
 Rules:
 - Each page represents one building step
+- Group steps into logical sections (base, walls, roof, details, etc.) like official LEGO manuals
 - Be specific about brick colors, sizes (e.g., "2x4 red brick", "1x2 blue plate")
 - Include helpful tips for tricky steps
 - Start with the foundation/base and build upward
 - Group related sub-assemblies together
-- Make instructions clear enough for a beginner`;
+- Make instructions clear enough for a ${difficultyLevel.toLowerCase()} builder
+- ${difficultyLevel === "Beginner" ? "Keep steps very simple with 1-3 pieces per step" : difficultyLevel === "Advanced" ? "Can include complex sub-assemblies and techniques" : "Balance detail with clarity"}
+- Include a complete parts list at the end with totals
+- partsNeeded should use the structured format with part, color, and quantity`;
 
     const userPrompt = `Create a ${manual.page_count}-page LEGO building manual for: "${manual.title}"
 
 Description: ${manual.description}
 
-Generate exactly ${manual.page_count} pages of step-by-step instructions. Return ONLY valid JSON.`;
+Generate exactly ${manual.page_count} pages of step-by-step instructions, organized into logical sections. Return ONLY valid JSON.`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -163,27 +189,66 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions. Return
             type: "function",
             function: {
               name: "create_manual",
-              description: "Create a LEGO instruction manual with step-by-step pages",
+              description: "Create a LEGO instruction manual with sections and step-by-step pages",
               parameters: {
                 type: "object",
                 properties: {
-                  pages: {
+                  difficulty: { type: "string" },
+                  style: { type: "string" },
+                  estimatedPieceCount: { type: "number" },
+                  sections: {
                     type: "array",
                     items: {
                       type: "object",
                       properties: {
-                        pageNumber: { type: "number" },
-                        title: { type: "string" },
-                        instructions: { type: "string" },
-                        partsNeeded: { type: "array", items: { type: "string" } },
-                        tip: { type: "string" },
+                        sectionTitle: { type: "string" },
+                        pages: {
+                          type: "array",
+                          items: {
+                            type: "object",
+                            properties: {
+                              pageNumber: { type: "number" },
+                              title: { type: "string" },
+                              instructions: { type: "string" },
+                              partsNeeded: {
+                                type: "array",
+                                items: {
+                                  type: "object",
+                                  properties: {
+                                    part: { type: "string" },
+                                    color: { type: "string" },
+                                    quantity: { type: "number" },
+                                  },
+                                  required: ["part", "color", "quantity"],
+                                  additionalProperties: false,
+                                },
+                              },
+                              tip: { type: "string" },
+                            },
+                            required: ["pageNumber", "title", "instructions", "partsNeeded"],
+                            additionalProperties: false,
+                          },
+                        },
                       },
-                      required: ["pageNumber", "title", "instructions", "partsNeeded"],
+                      required: ["sectionTitle", "pages"],
+                      additionalProperties: false,
+                    },
+                  },
+                  partsList: {
+                    type: "array",
+                    items: {
+                      type: "object",
+                      properties: {
+                        part: { type: "string" },
+                        color: { type: "string" },
+                        quantity: { type: "number" },
+                      },
+                      required: ["part", "color", "quantity"],
                       additionalProperties: false,
                     },
                   },
                 },
-                required: ["pages"],
+                required: ["difficulty", "style", "estimatedPieceCount", "sections", "partsList"],
                 additionalProperties: false,
               },
             },
@@ -224,29 +289,30 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions. Return
     } else {
       const text = aiResult.choices?.[0]?.message?.content || "";
       const jsonMatch = text.match(/\{[\s\S]*\}/);
-      content = jsonMatch ? JSON.parse(jsonMatch[0]) : { pages: [] };
+      content = jsonMatch ? JSON.parse(jsonMatch[0]) : { sections: [], partsList: [] };
     }
 
-    // --- Step 2: Generate images for each step ---
-    console.log(`Generating images for ${content.pages.length} steps...`);
+    // Flatten pages for image generation
+    const allPages = content.sections?.flatMap((s: any) => s.pages) || content.pages || [];
 
-    for (const page of content.pages) {
+    console.log(`Generating images for ${allPages.length} steps...`);
+
+    for (const page of allPages) {
       try {
+        const partsStr = Array.isArray(page.partsNeeded)
+          ? page.partsNeeded.map((p: any) => typeof p === "string" ? p : `${p.quantity}x ${p.color} ${p.part}`).join(", ")
+          : "";
+
         const base64Image = await generateStepImage(
           page.title,
           page.instructions,
-          page.partsNeeded,
+          [partsStr],
           manual.title,
           LOVABLE_API_KEY
         );
 
         if (base64Image) {
-          const publicUrl = await uploadImageToStorage(
-            supabase,
-            base64Image,
-            manualId,
-            page.pageNumber
-          );
+          const publicUrl = await uploadImageToStorage(supabase, base64Image, manualId, page.pageNumber);
           if (publicUrl) {
             page.imageUrl = publicUrl;
             console.log(`Image generated for step ${page.pageNumber}`);
@@ -254,17 +320,15 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions. Return
         }
       } catch (imgError) {
         console.error(`Image generation failed for step ${page.pageNumber}:`, imgError);
-        // Continue without image - not critical
       }
     }
 
-    // Update manual with generated content (including image URLs)
     await supabase
       .from("manuals")
       .update({ content, status: "completed" })
       .eq("id", manualId);
 
-    // Update pages used in subscription (best effort)
+    // Update pages used (best effort)
     try {
       const { error: rpcError } = await supabase.rpc("increment_pages_used", {
         p_user_id: userData.user.id,

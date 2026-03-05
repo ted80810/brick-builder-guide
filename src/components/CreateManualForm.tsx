@@ -244,43 +244,81 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
         {/* Page Count */}
         <div>
           <label className="block font-heading font-semibold text-foreground mb-2">
-            Number of Pages
+            Number of Steps
           </label>
-          <input
-            type="number"
-            min="1"
-            max="100"
-            value={pages}
-            onChange={(e) => setPages(e.target.value)}
-            className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-body"
-            required
-          />
-        </div>
-
-        {/* Free / Paid indicator */}
-        <div className={`flex items-start gap-3 p-4 rounded-xl ${isFree ? "bg-brick-green/10" : "bg-secondary/50"}`}>
-          {isFree ? (
-            <>
-              <FileText className="w-5 h-5 text-brick-green flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-heading font-semibold text-foreground text-sm">Free Manual</p>
-                <p className="text-muted-foreground text-xs">
-                  Manuals with 10 pages or less are free! Your manual will be shared in the community gallery.
-                </p>
+          {isMaster ? (
+            <div className="space-y-3">
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPages("auto")}
+                  className={`flex-1 px-4 py-3 rounded-xl border font-body text-sm transition-all ${
+                    pages === "auto"
+                      ? "border-primary bg-primary/10 text-primary font-semibold"
+                      : "border-input bg-background text-foreground hover:bg-secondary/50"
+                  }`}
+                >
+                  🤖 AI Decides
+                </button>
+                <input
+                  type="number"
+                  min="1"
+                  max="500"
+                  value={pages === "auto" ? "" : pages}
+                  onChange={(e) => setPages(e.target.value || "auto")}
+                  placeholder="Or set manually"
+                  className="flex-1 px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-body"
+                />
               </div>
-            </>
+              <div className="flex items-start gap-3 p-4 rounded-xl bg-brick-green/10">
+                <Sparkles className="w-5 h-5 text-brick-green flex-shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-heading font-semibold text-foreground text-sm">Master Builder — No Limits</p>
+                  <p className="text-muted-foreground text-xs">
+                    {pages === "auto"
+                      ? "The AI will generate as many comprehensive steps as needed."
+                      : "You can set any number of steps, or let the AI decide."}
+                  </p>
+                </div>
+              </div>
+            </div>
           ) : (
             <>
-              <AlertCircle className="w-5 h-5 text-brick-orange flex-shrink-0 mt-0.5" />
-              <div>
-                <p className="font-heading font-semibold text-foreground text-sm">
-                  {subscription.plan !== "free" ? `${subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1)} Plan Active` : "Subscription Required"}
-                </p>
-                <p className="text-muted-foreground text-xs">
-                  {subscription.plan !== "free"
-                    ? "You can generate this manual with your current plan."
-                    : "Manuals over 10 pages require a Pro ($9/mo) or Master ($29/mo) plan."}
-                </p>
+              <input
+                type="number"
+                min="1"
+                max="100"
+                value={pages}
+                onChange={(e) => setPages(e.target.value)}
+                className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-body"
+                required
+              />
+              <div className={`flex items-start gap-3 p-4 rounded-xl mt-3 ${isFree ? "bg-brick-green/10" : "bg-secondary/50"}`}>
+                {isFree ? (
+                  <>
+                    <FileText className="w-5 h-5 text-brick-green flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-heading font-semibold text-foreground text-sm">Free Manual</p>
+                      <p className="text-muted-foreground text-xs">
+                        Manuals with 10 pages or less are free! Your manual will be shared in the community gallery.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <AlertCircle className="w-5 h-5 text-brick-orange flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-heading font-semibold text-foreground text-sm">
+                        {subscription.plan !== "free" ? `${subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1)} Plan Active` : "Subscription Required"}
+                      </p>
+                      <p className="text-muted-foreground text-xs">
+                        {subscription.plan !== "free"
+                          ? "You can generate this manual with your current plan."
+                          : "Manuals over 10 pages require a Pro ($9/mo) or Master ($29/mo) plan."}
+                      </p>
+                    </div>
+                  </>
+                )}
               </div>
             </>
           )}

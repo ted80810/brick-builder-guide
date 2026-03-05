@@ -93,6 +93,18 @@ const CreateManualForm = () => {
 
       if (error) throw error;
 
+      // Save to prompt history
+      await supabase.from("prompt_history").insert({
+        user_id: user.id,
+        title,
+        description: idea,
+        page_count: pageCount,
+        difficulty: DIFFICULTY_LABELS[difficulty],
+        piece_target: pieceTarget ? parseInt(pieceTarget) : null,
+        style,
+        manual_id: manual.id,
+      } as any);
+
       toast({ title: "Manual generated!", description: "Your instruction manual is ready to view." });
       navigate(`/manual/${manual.id}`);
     } catch (err: any) {
@@ -102,6 +114,8 @@ const CreateManualForm = () => {
       setIsSubmitting(false);
     }
   };
+
+  return { form: (
 
   return (
     <div className="max-w-2xl mx-auto">

@@ -61,8 +61,8 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
   const isMaster = subscription.plan === "master";
   const isPro = subscription.plan === "pro";
   const pageCount = pages === "auto" ? 0 : (parseInt(pages) || 0);
-  const isFree = !isMaster && !isPro && pageCount <= 10;
-  const canGenerate = isMaster || isPro || isFree;
+  const hasRemainingManuals = subscription.manualsUsed < subscription.manualsLimit;
+  const canGenerate = hasRemainingManuals;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,7 +74,7 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
     }
 
     if (!canGenerate) {
-      toast({ title: "Subscription required", description: "Manuals over 10 pages require a Pro or Master plan.", variant: "destructive" });
+      toast({ title: "Monthly limit reached", description: "You've used all your manuals this month. Upgrade for more!", variant: "destructive" });
       return;
     }
 
@@ -88,7 +88,7 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
           title,
           description: idea,
           page_count: pages === "auto" ? 0 : pageCount,
-          is_public: isFree,
+          is_public: subscription.plan === "free",
           status: "pending",
         })
         .select()
@@ -293,28 +293,27 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
                 className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground focus:outline-none focus:ring-2 focus:ring-ring font-body"
                 required
               />
-              <div className={`flex items-start gap-3 p-4 rounded-xl mt-3 ${isFree ? "bg-brick-green/10" : "bg-secondary/50"}`}>
-                {isFree ? (
+              <div className={`flex items-start gap-3 p-4 rounded-xl mt-3 ${hasRemainingManuals ? "bg-brick-green/10" : "bg-destructive/10"}`}>
+                {hasRemainingManuals ? (
                   <>
                     <FileText className="w-5 h-5 text-brick-green flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-heading font-semibold text-foreground text-sm">Free Manual</p>
+                      <p className="font-heading font-semibold text-foreground text-sm">
+                        {subscription.plan === "free" ? "Free Builder" : `${subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1)} Plan`}
+                      </p>
                       <p className="text-muted-foreground text-xs">
-                        Manuals with 10 pages or less are free! Your manual will be shared in the community gallery.
+                        {subscription.manualsUsed} of {subscription.manualsLimit} manuals used this month.
+                        {subscription.plan === "free" && " Your manual will be shared in the community gallery."}
                       </p>
                     </div>
                   </>
                 ) : (
                   <>
-                    <AlertCircle className="w-5 h-5 text-brick-orange flex-shrink-0 mt-0.5" />
+                    <AlertCircle className="w-5 h-5 text-destructive flex-shrink-0 mt-0.5" />
                     <div>
-                      <p className="font-heading font-semibold text-foreground text-sm">
-                        {subscription.plan !== "free" ? `${subscription.plan.charAt(0).toUpperCase() + subscription.plan.slice(1)} Plan Active` : "Subscription Required"}
-                      </p>
+                      <p className="font-heading font-semibold text-foreground text-sm">Monthly Limit Reached</p>
                       <p className="text-muted-foreground text-xs">
-                        {subscription.plan !== "free"
-                          ? "You can generate this manual with your current plan."
-                          : "Manuals over 10 pages require a Pro ($9/mo) or Master ($29/mo) plan."}
+                        You've used all {subscription.manualsLimit} manuals this month. Upgrade your plan for more!
                       </p>
                     </div>
                   </>
@@ -329,7 +328,7 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
           variant="default"
           size="lg"
           className="w-full"
-          disabled={isSubmitting || (!canGenerate && !isFree)}
+          disabled={isSubmitting || !canGenerate}
         >
           {isSubmitting ? (
             <>

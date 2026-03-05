@@ -6,8 +6,8 @@ type SubscriptionPlan = "free" | "pro" | "master";
 
 interface SubscriptionInfo {
   plan: SubscriptionPlan;
-  pagesUsed: number;
-  pagesLimit: number;
+  manualsUsed: number;
+  manualsLimit: number;
   subscriptionEnd?: string;
 }
 
@@ -22,8 +22,8 @@ interface AuthContextType {
 
 const defaultSubscription: SubscriptionInfo = {
   plan: "free",
-  pagesUsed: 0,
-  pagesLimit: 10,
+  manualsUsed: 0,
+  manualsLimit: 2,
 };
 
 const AuthContext = createContext<AuthContextType>({
@@ -72,27 +72,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const { data, error } = await supabase.functions.invoke("check-subscription");
       if (error) throw error;
 
+      // Always fetch local subscription data for usage tracking
+      const { data: subData } = await supabase
+        .from("subscriptions")
+        .select("*")
+        .eq("user_id", session.user.id)
+        .maybeSingle();
+
       if (data?.subscribed) {
         const plan = getplanFromProductId(data.product_id);
         setSubscription({
           plan,
-          pagesUsed: 0,
-          pagesLimit: plan === "master" ? 999999 : 500,
+          manualsUsed: subData?.pages_used ?? 0,
+          manualsLimit: plan === "master" ? 999999 : 10,
           subscriptionEnd: data.subscription_end,
         });
       } else {
-        // Check local subscription table for page usage
-        const { data: subData } = await supabase
-          .from("subscriptions")
-          .select("*")
-          .eq("user_id", session.user.id)
-          .maybeSingle();
-
         const dbPlan = (subData?.plan as SubscriptionPlan) || "free";
         setSubscription({
           plan: dbPlan,
-          pagesUsed: subData?.pages_used ?? 0,
-          pagesLimit: dbPlan === "master" ? 999999 : dbPlan === "pro" ? 500 : 10,
+          manualsUsed: subData?.pages_used ?? 0,
+          manualsLimit: dbPlan === "master" ? 999999 : dbPlan === "pro" ? 10 : 2,
         });
       }
     } catch (err) {

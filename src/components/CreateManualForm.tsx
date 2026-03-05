@@ -1,12 +1,13 @@
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Sparkles, FileText, AlertCircle, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Slider } from "@/components/ui/slider";
+import type { PromptHistoryEntry } from "@/components/PromptHistory";
 
 const DIFFICULTY_LABELS = ["Beginner", "Intermediate", "Advanced"] as const;
 const STYLE_PRESETS = [

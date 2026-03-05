@@ -50,6 +50,8 @@ const CreateManualForm = forwardRef<CreateManualFormHandle>((_, ref) => {
     toast({ title: "Prompt loaded", description: "Edit anything and re-generate!" });
   }, [toast]);
 
+  useImperativeHandle(ref, () => ({ loadFromHistory }), [loadFromHistory]);
+
   const pageCount = parseInt(pages) || 0;
   const isFree = pageCount <= 10;
   const canGenerate = isFree || subscription.plan !== "free";

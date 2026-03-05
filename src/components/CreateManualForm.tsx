@@ -23,7 +23,7 @@ export interface CreateManualFormHandle {
   loadFromHistory: (entry: PromptHistoryEntry) => void;
 }
 
-const CreateManualForm = forwardRef<CreateManualFormHandle>((_, ref) => {
+const CreateManualForm = forwardRef<CreateManualFormHandle, Record<string, never>>((_, ref) => {
   const [searchParams] = useSearchParams();
   const remixFrom = searchParams.get("remix");
   const remixTitle = searchParams.get("title") || "";

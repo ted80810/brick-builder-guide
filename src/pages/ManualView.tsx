@@ -4,7 +4,8 @@ import { supabase } from "@/integrations/supabase/client";
 import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
-import { Download, ArrowLeft, Loader2, RefreshCw, Share2, Shuffle, Copy, Check } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
+import { Download, ArrowLeft, Loader2, RefreshCw, Share2, Shuffle, Copy, Check, Pencil, Trash2, Plus, X } from "lucide-react";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
@@ -12,6 +13,8 @@ interface PartItem {
   part: string;
   color: string;
   quantity: number;
+  isExtra?: boolean;
+  sourceNote?: string;
 }
 
 interface ManualPage {
@@ -33,7 +36,7 @@ interface ManualContent {
   style?: string;
   estimatedPieceCount?: number;
   sections?: ManualSection[];
-  pages?: ManualPage[]; // legacy flat format
+  pages?: ManualPage[];
   partsList?: PartItem[];
 }
 
@@ -46,6 +49,7 @@ interface Manual {
   content: ManualContent | null;
   created_at: string;
   is_public: boolean;
+  user_id?: string;
 }
 
 const ManualView = () => {
@@ -55,6 +59,12 @@ const ManualView = () => {
   const [loading, setLoading] = useState(true);
   const [regeneratingPage, setRegeneratingPage] = useState<number | null>(null);
   const [copied, setCopied] = useState(false);
+  const [editingStep, setEditingStep] = useState<number | null>(null);
+  const [editPrompt, setEditPrompt] = useState("");
+  const [addingAfterStep, setAddingAfterStep] = useState<number | null>(null);
+  const [addPrompt, setAddPrompt] = useState("");
+  const [stepActionLoading, setStepActionLoading] = useState(false);
+  const [isOwner, setIsOwner] = useState(false);
   const { toast } = useToast();
 
   useEffect(() => {
@@ -68,6 +78,12 @@ const ManualView = () => {
 
       if (error) console.error("Error fetching manual:", error);
       setManual(data as unknown as Manual | null);
+
+      // Check ownership
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && data && (data as any).user_id === user.id) {
+        setIsOwner(true);
+      }
       setLoading(false);
     };
     fetchManual();
@@ -113,6 +129,67 @@ const ManualView = () => {
       toast({ title: "Regeneration failed", description: err.message || "Please try again.", variant: "destructive" });
     } finally {
       setRegeneratingPage(null);
+    }
+  };
+
+  const handleEditStep = async (pageNumber: number) => {
+    if (!manual || !editPrompt.trim()) return;
+    setStepActionLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("edit-manual-step", {
+        body: { manualId: manual.id, action: "edit", pageNumber, editPrompt },
+      });
+      if (error) throw error;
+      if (data?.content) {
+        setManual(prev => prev ? { ...prev, content: data.content } : prev);
+        toast({ title: "Step updated!", description: `Step ${pageNumber} has been modified.` });
+      }
+      setEditingStep(null);
+      setEditPrompt("");
+    } catch (err: any) {
+      toast({ title: "Edit failed", description: err.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setStepActionLoading(false);
+    }
+  };
+
+  const handleDeleteStep = async (pageNumber: number) => {
+    if (!manual) return;
+    setStepActionLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("edit-manual-step", {
+        body: { manualId: manual.id, action: "delete", pageNumber },
+      });
+      if (error) throw error;
+      if (data?.content) {
+        setManual(prev => prev ? { ...prev, content: data.content } : prev);
+        toast({ title: "Step deleted", description: `Step ${pageNumber} has been removed.` });
+      }
+    } catch (err: any) {
+      toast({ title: "Delete failed", description: err.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setStepActionLoading(false);
+    }
+  };
+
+  const handleAddStep = async (afterPageNumber: number) => {
+    if (!manual || !addPrompt.trim()) return;
+    setStepActionLoading(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("edit-manual-step", {
+        body: { manualId: manual.id, action: "add", pageNumber: afterPageNumber, editPrompt: addPrompt },
+      });
+      if (error) throw error;
+      if (data?.content) {
+        setManual(prev => prev ? { ...prev, content: data.content } : prev);
+        toast({ title: "Step added!", description: "A new step has been inserted." });
+      }
+      setAddingAfterStep(null);
+      setAddPrompt("");
+    } catch (err: any) {
+      toast({ title: "Add failed", description: err.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setStepActionLoading(false);
     }
   };
 
@@ -167,6 +244,7 @@ const ManualView = () => {
           .parts ul { margin: 0; padding-left: 20px; }
           .parts li { margin: 4px 0; }
           .tip { background: #fff8e1; border-left: 4px solid #ffc107; padding: 12px 16px; border-radius: 0 8px 8px 0; margin-top: 12px; font-style: italic; }
+          .extra-badge { background: #ff9800; color: white; font-size: 0.7em; padding: 2px 6px; border-radius: 4px; margin-left: 4px; }
           .parts-list-page { page-break-before: always; }
           .parts-table { width: 100%; border-collapse: collapse; margin-top: 12px; }
           .parts-table th, .parts-table td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
@@ -206,9 +284,9 @@ const ManualView = () => {
           <div class="parts-list-page">
             <h2 class="section-title">📋 Complete Parts List</h2>
             <table class="parts-table">
-              <thead><tr><th>Part</th><th>Color</th><th>Qty</th></tr></thead>
+              <thead><tr><th>Part</th><th>Color</th><th>Qty</th><th>Source</th></tr></thead>
               <tbody>
-                ${partsList.map(p => `<tr><td>${p.part}</td><td>${p.color}</td><td>${p.quantity}</td></tr>`).join('')}
+                ${partsList.map(p => `<tr><td>${p.part}</td><td>${p.color}</td><td>${p.quantity}</td><td>${p.isExtra ? `<span class="extra-badge">EXTRA</span> ${p.sourceNote || ''}` : 'Selected sets'}</td></tr>`).join('')}
               </tbody>
             </table>
           </div>
@@ -240,7 +318,10 @@ const ManualView = () => {
     if (typeof parts[0] === "string") {
       return (parts as string[]).map(p => `<li>${p}</li>`).join("");
     }
-    return (parts as PartItem[]).map(p => `<li>${p.quantity}x ${p.color} ${p.part}</li>`).join("");
+    return (parts as PartItem[]).map(p => {
+      const extra = p.isExtra ? ` <span class="extra-badge">EXTRA</span> ${p.sourceNote || ''}` : '';
+      return `<li>${p.quantity}x ${p.color} ${p.part}${extra}</li>`;
+    }).join("");
   };
 
   const renderPartsUI = (parts: PartItem[] | string[]) => {
@@ -249,7 +330,14 @@ const ManualView = () => {
       return (parts as string[]).map((p, i) => <li key={i}>{p}</li>);
     }
     return (parts as PartItem[]).map((p, i) => (
-      <li key={i}>{p.quantity}x {p.color} {p.part}</li>
+      <li key={i} className={p.isExtra ? "text-accent" : ""}>
+        {p.quantity}x {p.color} {p.part}
+        {p.isExtra && (
+          <span className="ml-1 text-xs bg-accent/20 text-accent px-1.5 py-0.5 rounded-full font-semibold">
+            EXTRA{p.sourceNote ? ` — ${p.sourceNote}` : ''}
+          </span>
+        )}
+      </li>
     ));
   };
 
@@ -369,19 +457,31 @@ const ManualView = () => {
 
             {manual.status === "completed" && allPages.length > 0 && (
               <div className="space-y-8">
-                {/* Render by sections if available, otherwise flat */}
+                {/* Add step at beginning */}
+                {isOwner && renderAddStepButton(0)}
+
                 {sections ? sections.map((section, si) => (
                   <div key={si}>
                     <h2 className="text-xl md:text-2xl font-heading font-bold text-brick-green mb-4 border-b-2 border-brick-green/30 pb-2">
                       {section.sectionTitle}
                     </h2>
                     <div className="space-y-6">
-                      {section.pages.map((page) => renderPage(page))}
+                      {section.pages.map((page) => (
+                        <div key={page.pageNumber}>
+                          {renderPage(page)}
+                          {isOwner && renderAddStepButton(page.pageNumber)}
+                        </div>
+                      ))}
                     </div>
                   </div>
                 )) : (
                   <div className="space-y-6">
-                    {allPages.map((page) => renderPage(page))}
+                    {allPages.map((page) => (
+                      <div key={page.pageNumber}>
+                        {renderPage(page)}
+                        {isOwner && renderAddStepButton(page.pageNumber)}
+                      </div>
+                    ))}
                   </div>
                 )}
 
@@ -402,14 +502,24 @@ const ManualView = () => {
                             <th className="text-left py-2 px-3 font-heading font-semibold text-foreground">Part</th>
                             <th className="text-left py-2 px-3 font-heading font-semibold text-foreground">Color</th>
                             <th className="text-right py-2 px-3 font-heading font-semibold text-foreground">Qty</th>
+                            <th className="text-left py-2 px-3 font-heading font-semibold text-foreground">Source</th>
                           </tr>
                         </thead>
                         <tbody>
                           {partsList.map((p, i) => (
-                            <tr key={i} className="border-b border-border">
+                            <tr key={i} className={`border-b border-border ${p.isExtra ? 'bg-accent/5' : ''}`}>
                               <td className="py-2 px-3 text-foreground">{p.part}</td>
                               <td className="py-2 px-3 text-muted-foreground">{p.color}</td>
                               <td className="py-2 px-3 text-right font-semibold text-foreground">{p.quantity}</td>
+                              <td className="py-2 px-3 text-sm">
+                                {p.isExtra ? (
+                                  <span className="text-accent text-xs">
+                                    ⚠️ Extra — {p.sourceNote || 'Not in selected sets'}
+                                  </span>
+                                ) : (
+                                  <span className="text-muted-foreground text-xs">✓ In selected sets</span>
+                                )}
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -429,6 +539,52 @@ const ManualView = () => {
     </div>
   );
 
+  function renderAddStepButton(afterPageNumber: number) {
+    if (addingAfterStep === afterPageNumber) {
+      return (
+        <div className="my-3 p-4 bg-card rounded-xl border-2 border-dashed border-brick-green/40 space-y-3">
+          <div className="flex items-center justify-between">
+            <span className="text-sm font-heading font-semibold text-foreground">
+              Add new step {afterPageNumber === 0 ? 'at the beginning' : `after step ${afterPageNumber}`}
+            </span>
+            <Button variant="ghost" size="sm" onClick={() => { setAddingAfterStep(null); setAddPrompt(""); }}>
+              <X className="w-4 h-4" />
+            </Button>
+          </div>
+          <Textarea
+            value={addPrompt}
+            onChange={(e) => setAddPrompt(e.target.value)}
+            placeholder="Describe the new step to add, e.g., 'Add support beams to the base before building walls'"
+            rows={3}
+          />
+          <Button
+            size="sm"
+            onClick={() => handleAddStep(afterPageNumber)}
+            disabled={stepActionLoading || !addPrompt.trim()}
+            className="gap-1"
+          >
+            {stepActionLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plus className="w-3 h-3" />}
+            {stepActionLoading ? "Adding..." : "Add Step"}
+          </Button>
+        </div>
+      );
+    }
+
+    return (
+      <div className="my-2 flex justify-center">
+        <Button
+          variant="ghost"
+          size="sm"
+          className="text-xs text-muted-foreground hover:text-brick-green gap-1 opacity-40 hover:opacity-100 transition-opacity"
+          onClick={() => setAddingAfterStep(afterPageNumber)}
+        >
+          <Plus className="w-3 h-3" />
+          Add step
+        </Button>
+      </div>
+    );
+  }
+
   function renderPage(page: ManualPage) {
     return (
       <motion.div
@@ -444,8 +600,66 @@ const ManualView = () => {
               {page.pageNumber}
             </span>
           </div>
-          <h3 className="font-heading font-bold text-xl text-foreground">{page.title}</h3>
+          <h3 className="font-heading font-bold text-xl text-foreground flex-1">{page.title}</h3>
+
+          {/* Edit/Delete buttons for owners */}
+          {isOwner && (
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-muted-foreground hover:text-foreground"
+                onClick={() => {
+                  setEditingStep(editingStep === page.pageNumber ? null : page.pageNumber);
+                  setEditPrompt("");
+                }}
+                title="Edit step"
+              >
+                <Pencil className="w-4 h-4" />
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-8 w-8 p-0 text-muted-foreground hover:text-destructive"
+                onClick={() => handleDeleteStep(page.pageNumber)}
+                disabled={stepActionLoading}
+                title="Delete step"
+              >
+                <Trash2 className="w-4 h-4" />
+              </Button>
+            </div>
+          )}
         </div>
+
+        {/* Edit prompt area */}
+        {editingStep === page.pageNumber && (
+          <div className="mb-4 p-4 bg-muted/50 rounded-xl border border-border space-y-3">
+            <Textarea
+              value={editPrompt}
+              onChange={(e) => setEditPrompt(e.target.value)}
+              placeholder="Describe how to modify this step, e.g., 'Add more detail about connecting the bricks' or 'Change to use blue bricks instead of red'"
+              rows={3}
+            />
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                onClick={() => handleEditStep(page.pageNumber)}
+                disabled={stepActionLoading || !editPrompt.trim()}
+                className="gap-1"
+              >
+                {stepActionLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Pencil className="w-3 h-3" />}
+                {stepActionLoading ? "Updating..." : "Update Step"}
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => { setEditingStep(null); setEditPrompt(""); }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </div>
+        )}
 
         {page.imageUrl && (
           <div className="mb-4 rounded-xl overflow-hidden border border-border relative group">

@@ -58,9 +58,11 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
     }
   }, [loadedEntry]);
 
-  const pageCount = parseInt(pages) || 0;
-  const isFree = pageCount <= 10;
-  const canGenerate = isFree || subscription.plan !== "free";
+  const isMaster = subscription.plan === "master";
+  const isPro = subscription.plan === "pro";
+  const pageCount = pages === "auto" ? 0 : (parseInt(pages) || 0);
+  const isFree = !isMaster && !isPro && pageCount <= 10;
+  const canGenerate = isMaster || isPro || isFree;
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();

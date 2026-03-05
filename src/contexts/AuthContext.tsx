@@ -88,10 +88,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           .eq("user_id", session.user.id)
           .maybeSingle();
 
+        const dbPlan = (subData?.plan as SubscriptionPlan) || "free";
         setSubscription({
-          plan: "free",
+          plan: dbPlan,
           pagesUsed: subData?.pages_used ?? 0,
-          pagesLimit: 10,
+          pagesLimit: dbPlan === "master" ? 999999 : dbPlan === "pro" ? 500 : 10,
         });
       }
     } catch (err) {

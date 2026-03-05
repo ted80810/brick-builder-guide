@@ -94,7 +94,7 @@ serve(async (req) => {
     const { data: userData, error: authError } = await supabase.auth.getUser(token);
     if (authError || !userData.user) throw new Error("Not authenticated");
 
-    const { manualId, difficulty, pieceTarget, style } = await req.json();
+    const { manualId, difficulty, pieceTarget, style, selectedSets, allowExtras } = await req.json();
     if (!manualId) throw new Error("manualId is required");
 
     const { data: manual, error: manualError } = await supabase
@@ -108,12 +108,44 @@ serve(async (req) => {
 
     await supabase.from("manuals").update({ status: "generating" }).eq("id", manualId);
 
+
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
 
     const difficultyLevel = difficulty || "Beginner";
     const stylePreset = style || "classic";
     const pieceConstraint = pieceTarget ? `\nIMPORTANT: The total build should use approximately ${pieceTarget} pieces or fewer. Keep the parts list realistic and shoppable.` : "";
+
+    // LEGO set constraint
+    const legoSetNames: Record<string, string> = {
+      "10698": "Classic Large Creative Brick Box (10698)", "11717": "Bricks Bricks Plates (11717)",
+      "10696": "Medium Creative Brick Box (10696)", "11013": "Creative Transparent Bricks (11013)",
+      "11014": "Bricks and Wheels (11014)", "11030": "Lots of Bricks (11030)",
+      "31058": "Creator Mighty Dinosaurs (31058)", "31109": "Creator Pirate Ship (31109)",
+      "31120": "Creator Medieval Castle (31120)", "31139": "Creator Cozy House (31139)",
+      "31145": "Creator Red Dragon (31145)", "31150": "Creator Wild Safari Animals (31150)",
+      "31152": "Creator Space Astronaut (31152)", "31153": "Creator Modern House (31153)",
+      "42151": "Technic Bugatti Bolide (42151)", "42115": "Technic Lamborghini Sián (42115)",
+      "60349": "City Lunar Space Station (60349)", "60337": "City Express Passenger Train (60337)",
+      "21054": "Architecture The White House (21054)", "21060": "Architecture Himeji Castle (21060)",
+      "75192": "Star Wars Millennium Falcon (75192)", "75375": "Star Wars Millennium Falcon 2024 (75375)",
+    };
+
+    let setConstraintPrompt = "";
+    if (selectedSets && selectedSets.length > 0) {
+      const setDescriptions = selectedSets.map((id: string) => legoSetNames[id] || `LEGO Set ${id}`).join(", ");
+      if (allowExtras) {
+        setConstraintPrompt = `\n\nLEGO SET CONSTRAINT: The user owns these LEGO sets: ${setDescriptions}. 
+PREFER pieces from these sets. If a piece is NOT available in any of the selected sets, you MAY still use it but you MUST mark it as an extra piece. 
+For each extra piece, add a field "isExtra": true and "sourceNote": "Not in selected sets — available in [suggest a real LEGO set where this piece can be found]" to the partsNeeded entry.
+Do NOT suggest pieces that don't exist in any real LEGO set.`;
+      } else {
+        setConstraintPrompt = `\n\nLEGO SET CONSTRAINT (STRICT): The user owns these LEGO sets: ${setDescriptions}.
+ONLY use pieces that are actually found in these sets. Do NOT use any piece that is not included in one of these sets.
+If you cannot complete the build with only these pieces, simplify the design to work within the available pieces.
+Every piece in partsNeeded must exist in at least one of the selected sets.`;
+      }
+    }
 
     const styleDescriptions: Record<string, string> = {
       classic: "Traditional LEGO style with bright primary colors",
@@ -129,6 +161,7 @@ serve(async (req) => {
 Difficulty level: ${difficultyLevel}
 Style: ${styleDescriptions[stylePreset] || styleDescriptions.classic}
 ${pieceConstraint}
+${setConstraintPrompt}
 
 Your output must be a valid JSON object with this structure:
 {
@@ -218,6 +251,8 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions, organi
                                     part: { type: "string" },
                                     color: { type: "string" },
                                     quantity: { type: "number" },
+                                    isExtra: { type: "boolean" },
+                                    sourceNote: { type: "string" },
                                   },
                                   required: ["part", "color", "quantity"],
                                   additionalProperties: false,

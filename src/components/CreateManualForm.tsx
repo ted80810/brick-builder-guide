@@ -8,6 +8,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Slider } from "@/components/ui/slider";
+import LegoSetSelector from "@/components/LegoSetSelector";
 import type { PromptHistoryEntry } from "@/components/PromptHistory";
 
 const DIFFICULTY_LABELS = ["Beginner", "Intermediate", "Advanced"] as const;
@@ -37,6 +38,8 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
   const [difficulty, setDifficulty] = useState(0);
   const [pieceTarget, setPieceTarget] = useState<string>("");
   const [style, setStyle] = useState<string>("classic");
+  const [selectedSets, setSelectedSets] = useState<string[]>([]);
+  const [allowExtras, setAllowExtras] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { user, subscription } = useAuth();
   const navigate = useNavigate();
@@ -97,6 +100,8 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
           difficulty: DIFFICULTY_LABELS[difficulty],
           pieceTarget: pieceTarget ? parseInt(pieceTarget) : null,
           style,
+          selectedSets: selectedSets.length > 0 ? selectedSets : null,
+          allowExtras,
         },
       });
 
@@ -156,12 +161,20 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
           <textarea
             value={idea}
             onChange={(e) => setIdea(e.target.value)}
-            placeholder="Describe what you want to build in detail. Include colors, themes, special features, and any specific LEGO Creator set pieces you'd like to use..."
+            placeholder="Describe what you want to build in detail. Include colors, themes, special features..."
             rows={5}
             className="w-full px-4 py-3 rounded-xl border border-input bg-background text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-ring font-body resize-none"
             required
           />
         </div>
+
+        {/* LEGO Set Selector */}
+        <LegoSetSelector
+          selectedSets={selectedSets}
+          onSelectionChange={setSelectedSets}
+          allowExtras={allowExtras}
+          onAllowExtrasChange={setAllowExtras}
+        />
 
         {/* Difficulty Slider */}
         <div>

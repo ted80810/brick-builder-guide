@@ -97,6 +97,17 @@ serve(async (req) => {
     const { manualId, difficulty, pieceTarget, style, selectedSets, allowExtras } = await req.json();
     if (!manualId) throw new Error("manualId is required");
 
+    const { data: manual, error: manualError } = await supabase
+      .from("manuals")
+      .select("*")
+      .eq("id", manualId)
+      .eq("user_id", userData.user.id)
+      .single();
+
+    if (manualError || !manual) throw new Error("Manual not found");
+
+    await supabase.from("manuals").update({ status: "generating" }).eq("id", manualId);
+
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
@@ -150,6 +161,7 @@ Every piece in partsNeeded must exist in at least one of the selected sets.`;
 Difficulty level: ${difficultyLevel}
 Style: ${styleDescriptions[stylePreset] || styleDescriptions.classic}
 ${pieceConstraint}
+${setConstraintPrompt}
 
 Your output must be a valid JSON object with this structure:
 {

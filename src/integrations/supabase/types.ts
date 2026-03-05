@@ -83,6 +83,53 @@ export type Database = {
         }
         Relationships: []
       }
+      prompt_history: {
+        Row: {
+          created_at: string
+          description: string
+          difficulty: string
+          id: string
+          manual_id: string | null
+          page_count: number
+          piece_target: number | null
+          style: string
+          title: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          description: string
+          difficulty?: string
+          id?: string
+          manual_id?: string | null
+          page_count?: number
+          piece_target?: number | null
+          style?: string
+          title: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          description?: string
+          difficulty?: string
+          id?: string
+          manual_id?: string | null
+          page_count?: number
+          piece_target?: number | null
+          style?: string
+          title?: string
+          user_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "prompt_history_manual_id_fkey"
+            columns: ["manual_id"]
+            isOneToOne: false
+            referencedRelation: "manuals"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       subscriptions: {
         Row: {
           created_at: string

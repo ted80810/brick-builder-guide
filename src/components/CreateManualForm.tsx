@@ -41,17 +41,18 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
   const navigate = useNavigate();
   const { toast } = useToast();
 
-  const loadFromHistory = useCallback((entry: PromptHistoryEntry) => {
-    setTitle(entry.title);
-    setIdea(entry.description);
-    setPages(String(entry.page_count));
-    setDifficulty(DIFFICULTY_LABELS.indexOf(entry.difficulty as any) ?? 0);
-    setPieceTarget(entry.piece_target ? String(entry.piece_target) : "");
-    setStyle(entry.style);
-    toast({ title: "Prompt loaded", description: "Edit anything and re-generate!" });
-  }, [toast]);
-
-  useImperativeHandle(ref, () => ({ loadFromHistory }), [loadFromHistory]);
+  useEffect(() => {
+    if (loadedEntry) {
+      setTitle(loadedEntry.title);
+      setIdea(loadedEntry.description);
+      setPages(String(loadedEntry.page_count));
+      setDifficulty(DIFFICULTY_LABELS.indexOf(loadedEntry.difficulty as any) ?? 0);
+      setPieceTarget(loadedEntry.piece_target ? String(loadedEntry.piece_target) : "");
+      setStyle(loadedEntry.style);
+      toast({ title: "Prompt loaded", description: "Edit anything and re-generate!" });
+      onEntryLoaded?.();
+    }
+  }, [loadedEntry]);
 
   const pageCount = parseInt(pages) || 0;
   const isFree = pageCount <= 10;

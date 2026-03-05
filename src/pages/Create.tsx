@@ -3,11 +3,11 @@ import Footer from "@/components/Footer";
 import CreateManualForm from "@/components/CreateManualForm";
 import PromptHistory from "@/components/PromptHistory";
 import { motion } from "framer-motion";
-import { useState, useRef } from "react";
+import { useState } from "react";
 import type { PromptHistoryEntry } from "@/components/PromptHistory";
 
 const Create = () => {
-  const formRef = useRef<{ loadFromHistory: (entry: PromptHistoryEntry) => void }>(null);
+  const [loadedEntry, setLoadedEntry] = useState<PromptHistoryEntry | null>(null);
 
   return (
     <div className="min-h-screen bg-background flex flex-col">
@@ -26,8 +26,8 @@ const Create = () => {
               Describe your build and we'll generate a detailed instruction manual with illustrations.
             </p>
           </motion.div>
-          <PromptHistory onLoad={(entry) => formRef.current?.loadFromHistory(entry)} />
-          <CreateManualForm ref={formRef} />
+          <PromptHistory onLoad={setLoadedEntry} />
+          <CreateManualForm loadedEntry={loadedEntry} onEntryLoaded={() => setLoadedEntry(null)} />
         </div>
       </main>
       <Footer />

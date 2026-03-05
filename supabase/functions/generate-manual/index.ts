@@ -251,6 +251,8 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions, organi
                                     part: { type: "string" },
                                     color: { type: "string" },
                                     quantity: { type: "number" },
+                                    isExtra: { type: "boolean" },
+                                    sourceNote: { type: "string" },
                                   },
                                   required: ["part", "color", "quantity"],
                                   additionalProperties: false,

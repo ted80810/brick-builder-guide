@@ -199,7 +199,14 @@ Rules:
 - Include a complete parts list at the end with totals
 - partsNeeded should use the structured format with part, color, and quantity`;
 
-    const userPrompt = `Create a ${manual.page_count}-page LEGO building manual for: "${manual.title}"
+    const aiDecides = manual.page_count === 0;
+    const userPrompt = aiDecides
+      ? `Create a comprehensive LEGO building manual for: "${manual.title}"
+
+Description: ${manual.description}
+
+Generate as many steps as needed for a complete, detailed build. Do NOT skip steps. Every single piece placement should be documented. Return ONLY valid JSON.`
+      : `Create a ${manual.page_count}-page LEGO building manual for: "${manual.title}"
 
 Description: ${manual.description}
 

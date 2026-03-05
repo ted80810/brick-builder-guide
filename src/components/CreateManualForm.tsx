@@ -28,13 +28,23 @@ const CreateManualForm = () => {
   const [idea, setIdea] = useState(remixDesc);
   const [pages, setPages] = useState<string>("5");
   const [title, setTitle] = useState(remixFrom ? `Remix: ${remixTitle}` : "");
-  const [difficulty, setDifficulty] = useState(0); // 0=beginner, 1=intermediate, 2=advanced
+  const [difficulty, setDifficulty] = useState(0);
   const [pieceTarget, setPieceTarget] = useState<string>("");
   const [style, setStyle] = useState<string>("classic");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { user, subscription } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  const loadFromHistory = useCallback((entry: PromptHistoryEntry) => {
+    setTitle(entry.title);
+    setIdea(entry.description);
+    setPages(String(entry.page_count));
+    setDifficulty(DIFFICULTY_LABELS.indexOf(entry.difficulty as any) ?? 0);
+    setPieceTarget(entry.piece_target ? String(entry.piece_target) : "");
+    setStyle(entry.style);
+    toast({ title: "Prompt loaded", description: "Edit anything and re-generate!" });
+  }, [toast]);
 
   const pageCount = parseInt(pages) || 0;
   const isFree = pageCount <= 10;

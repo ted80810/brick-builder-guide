@@ -87,7 +87,7 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
           user_id: user.id,
           title,
           description: idea,
-          page_count: pageCount,
+          page_count: pages === "auto" ? 0 : pageCount,
           is_public: isFree,
           status: "pending",
         })

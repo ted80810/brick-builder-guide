@@ -296,6 +296,6 @@ const CreateManualForm = forwardRef<CreateManualFormHandle>((_, ref) => {
       </motion.form>
     </div>
   );
-};
+});
 
 export default CreateManualForm;

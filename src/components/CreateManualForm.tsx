@@ -1,3 +1,4 @@
+// CreateManualForm - standard function component
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Sparkles, FileText, AlertCircle, Loader2 } from "lucide-react";

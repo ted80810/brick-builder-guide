@@ -1,7 +1,7 @@
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Sparkles, FileText, AlertCircle, Loader2 } from "lucide-react";
-import { useState, useCallback, forwardRef, useImperativeHandle } from "react";
+import { useState, useCallback, useEffect } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
@@ -19,11 +19,12 @@ const STYLE_PRESETS = [
   { id: "whimsical", label: "Whimsical", emoji: "🎪" },
 ] as const;
 
-export interface CreateManualFormHandle {
-  loadFromHistory: (entry: PromptHistoryEntry) => void;
+interface CreateManualFormProps {
+  loadedEntry?: PromptHistoryEntry | null;
+  onEntryLoaded?: () => void;
 }
 
-const CreateManualForm = forwardRef<CreateManualFormHandle, Record<string, never>>((_, ref) => {
+const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps) => {
   const [searchParams] = useSearchParams();
   const remixFrom = searchParams.get("remix");
   const remixTitle = searchParams.get("title") || "";

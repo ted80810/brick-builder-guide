@@ -1,12 +1,13 @@
 import { motion } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Sparkles, FileText, AlertCircle, Loader2 } from "lucide-react";
-import { useState } from "react";
+import { useState, useCallback, forwardRef, useImperativeHandle } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import { useAuth } from "@/contexts/AuthContext";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
 import { Slider } from "@/components/ui/slider";
+import type { PromptHistoryEntry } from "@/components/PromptHistory";
 
 const DIFFICULTY_LABELS = ["Beginner", "Intermediate", "Advanced"] as const;
 const STYLE_PRESETS = [
@@ -18,7 +19,11 @@ const STYLE_PRESETS = [
   { id: "whimsical", label: "Whimsical", emoji: "🎪" },
 ] as const;
 
-const CreateManualForm = () => {
+export interface CreateManualFormHandle {
+  loadFromHistory: (entry: PromptHistoryEntry) => void;
+}
+
+const CreateManualForm = forwardRef<CreateManualFormHandle>((_, ref) => {
   const [searchParams] = useSearchParams();
   const remixFrom = searchParams.get("remix");
   const remixTitle = searchParams.get("title") || "";
@@ -27,13 +32,25 @@ const CreateManualForm = () => {
   const [idea, setIdea] = useState(remixDesc);
   const [pages, setPages] = useState<string>("5");
   const [title, setTitle] = useState(remixFrom ? `Remix: ${remixTitle}` : "");
-  const [difficulty, setDifficulty] = useState(0); // 0=beginner, 1=intermediate, 2=advanced
+  const [difficulty, setDifficulty] = useState(0);
   const [pieceTarget, setPieceTarget] = useState<string>("");
   const [style, setStyle] = useState<string>("classic");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const { user, subscription } = useAuth();
   const navigate = useNavigate();
   const { toast } = useToast();
+
+  const loadFromHistory = useCallback((entry: PromptHistoryEntry) => {
+    setTitle(entry.title);
+    setIdea(entry.description);
+    setPages(String(entry.page_count));
+    setDifficulty(DIFFICULTY_LABELS.indexOf(entry.difficulty as any) ?? 0);
+    setPieceTarget(entry.piece_target ? String(entry.piece_target) : "");
+    setStyle(entry.style);
+    toast({ title: "Prompt loaded", description: "Edit anything and re-generate!" });
+  }, [toast]);
+
+  useImperativeHandle(ref, () => ({ loadFromHistory }), [loadFromHistory]);
 
   const pageCount = parseInt(pages) || 0;
   const isFree = pageCount <= 10;
@@ -82,6 +99,18 @@ const CreateManualForm = () => {
 
       if (error) throw error;
 
+      // Save to prompt history
+      await supabase.from("prompt_history").insert({
+        user_id: user.id,
+        title,
+        description: idea,
+        page_count: pageCount,
+        difficulty: DIFFICULTY_LABELS[difficulty],
+        piece_target: pieceTarget ? parseInt(pieceTarget) : null,
+        style,
+        manual_id: manual.id,
+      } as any);
+
       toast({ title: "Manual generated!", description: "Your instruction manual is ready to view." });
       navigate(`/manual/${manual.id}`);
     } catch (err: any) {
@@ -94,6 +123,7 @@ const CreateManualForm = () => {
 
   return (
     <div className="max-w-2xl mx-auto">
+
       <motion.form
         initial={{ opacity: 0, y: 20 }}
         animate={{ opacity: 1, y: 0 }}
@@ -268,6 +298,6 @@ const CreateManualForm = () => {
       </motion.form>
     </div>
   );
-};
+});
 
 export default CreateManualForm;

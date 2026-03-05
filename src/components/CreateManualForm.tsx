@@ -299,6 +299,6 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
       </motion.form>
     </div>
   );
-});
+};
 
 export default CreateManualForm;

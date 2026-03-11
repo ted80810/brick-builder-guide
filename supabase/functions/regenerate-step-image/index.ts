@@ -35,8 +35,10 @@ serve(async (req) => {
 
     if (manualError || !manual) throw new Error("Manual not found");
 
-    const content = manual.content as { pages: any[] };
-    const page = content?.pages?.find((p: any) => p.pageNumber === pageNumber);
+    const content = manual.content as any;
+    // Support both flat pages and sectioned content
+    const allPages = content?.sections?.flatMap((s: any) => s.pages) || content?.pages || [];
+    const page = allPages.find((p: any) => p.pageNumber === pageNumber);
     if (!page) throw new Error("Page not found");
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");

@@ -35,8 +35,10 @@ serve(async (req) => {
 
     if (manualError || !manual) throw new Error("Manual not found");
 
-    const content = manual.content as { pages: any[] };
-    const page = content?.pages?.find((p: any) => p.pageNumber === pageNumber);
+    const content = manual.content as any;
+    // Support both flat pages and sectioned content
+    const allPages = content?.sections?.flatMap((s: any) => s.pages) || content?.pages || [];
+    const page = allPages.find((p: any) => p.pageNumber === pageNumber);
     if (!page) throw new Error("Page not found");
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
@@ -93,9 +95,23 @@ Style: Clean technical illustration, isometric view, white background, colorful 
     const { data: urlData } = supabase.storage.from("manual-images").getPublicUrl(filePath);
     const publicUrl = urlData?.publicUrl;
 
-    // Update manual content with new image URL (add cache buster)
+    // Update the page in the original content structure and save
     const imageUrl = `${publicUrl}?t=${Date.now()}`;
-    page.imageUrl = imageUrl;
+    if (content.sections) {
+      for (const section of content.sections) {
+        for (let i = 0; i < section.pages.length; i++) {
+          if (section.pages[i].pageNumber === pageNumber) {
+            section.pages[i].imageUrl = imageUrl;
+          }
+        }
+      }
+    } else if (content.pages) {
+      for (let i = 0; i < content.pages.length; i++) {
+        if (content.pages[i].pageNumber === pageNumber) {
+          content.pages[i].imageUrl = imageUrl;
+        }
+      }
+    }
     await supabase.from("manuals").update({ content }).eq("id", manualId);
 
     return new Response(JSON.stringify({ success: true, imageUrl }), {

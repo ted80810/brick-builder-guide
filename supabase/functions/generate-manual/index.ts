@@ -6,16 +6,15 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-
 // ─────────────────────────────────────────────────────────────────────────────
-// Isometric LEGO brick SVG renderer — v3
-// Features:
-//   • Auto-fit: computes bounding box of all geometry, scales + centres to fill canvas
-//   • Realistic brick faces: gradient shading, proper proportions
-//   • Realistic studs: cylinder body (side strip + top ellipse + highlight ring)
-//   • Proper painter's sort (layer asc, then col+row asc = back-to-front)
-//   • Handles plates (1/3 height of brick), tiles (no studs), round bricks
-//   • Yellow highlight outline + arrows for new pieces
+// Isometric LEGO brick SVG renderer — v4
+// Key fixes vs v3:
+//   • Face-level depth sort (painter's algorithm applied per-face, not per-brick)
+//     This eliminates "missing sides" caused by adjacent bricks occluding each other
+//   • Correct depth formula: left face uses back-col edge, right face uses front-col edge
+//   • Layer multiplier 1000 ensures layer always beats col+row depth
+//   • Auto-fit bounding box centres and scales ALL pieces into the canvas
+//   • Realistic cylindrical studs with highlight crescent
 // ─────────────────────────────────────────────────────────────────────────────
 function renderStepSVG(params: {
   placedPieces: any[];
@@ -28,19 +27,17 @@ function renderStepSVG(params: {
   const { placedPieces, newPieceIds, hasBaseplate, baseplateSize } = params;
 
   // ── Constants ────────────────────────────────────────────────────────────
-  // One stud cell in isometric screen space
-  const CW = 32;          // half-width of one cell in iso x  (horizontal spread)
-  const CH = 18;          // half-height of one cell in iso y (vertical spread)
-  const BRICK_Z = 28;     // screen pixels per full brick layer
-  const PLATE_Z = 10;     // screen pixels per plate/tile layer
-  const STUD_CY_H = 6;    // cylinder height of stud in screen px
+  const CW = 32;          // iso x spread per stud column
+  const CH = 18;          // iso y spread per stud row
+  const BRICK_Z = 28;     // screen px per full brick layer
+  const PLATE_Z = 10;     // screen px per plate layer
+  const STUD_CY_H = 6;    // stud cylinder height px
   const STUD_RX = 5.5;    // stud ellipse x-radius
   const STUD_RY = 3.2;    // stud ellipse y-radius
 
   // ── Colour palette ───────────────────────────────────────────────────────
-  // Each colour has: top face, left face (side), right face (front), stud top, stud ring
-  const PALETTE: Record<string, [string, string, string, string, string]> = {
-    // name                  top        left       right      studTop    studRing
+  // [top, left-face, right-face, stud-top, stud-ring]
+  const PALETTE: Record<string, [string,string,string,string,string]> = {
     "Red":           ["#C91A09","#8B1107","#A01208","#C91A09","#7A0F06"],
     "Blue":          ["#0057A6","#003A70","#004A8C","#0057A6","#002E58"],
     "Dark Blue":     ["#003152","#001830","#002440","#003152","#001020"],
@@ -72,187 +69,55 @@ function renderStepSVG(params: {
     return k ? PALETTE[k] : PALETTE["Light Gray"];
   }
 
-  // ── Part classification ──────────────────────────────────────────────────
-  function layerHeight(part: string): number {
-    const p = (part || "").toLowerCase();
+  function lhOf(part: string): number {
+    const p = (part||"").toLowerCase();
     return (p.includes("plate") || p.includes("tile")) ? PLATE_Z : BRICK_Z;
   }
-  function isTile(part: string): boolean {
-    return (part || "").toLowerCase().includes("tile");
-  }
-  function isRound(part: string): boolean {
-    return (part || "").toLowerCase().includes("round");
-  }
+  function isTile(part: string): boolean { return (part||"").toLowerCase().includes("tile"); }
+  function isRound(part: string): boolean { return (part||"").toLowerCase().includes("round"); }
 
-  // ── Isometric projection ─────────────────────────────────────────────────
-  // Returns raw (unshifted) screen coords for a grid point (col, row, layer).
-  // col/row are stud-grid indices, layer is brick-layer index.
-  // lh = layer height in pixels for this piece type.
+  // ── Raw isometric projection (no canvas offset) ──────────────────────────
   function isoRaw(col: number, row: number, layer: number, lh: number) {
-    return {
-      x: (col - row) * CW,
-      y: (col + row) * CH - layer * lh,
-    };
+    return { x: (col - row) * CW, y: (col + row) * CH - layer * lh };
   }
 
-  // ── SVG helpers ──────────────────────────────────────────────────────────
+  // ── SVG primitives ───────────────────────────────────────────────────────
   function fmt(n: number) { return n.toFixed(1); }
   function polygon(pts: {x:number;y:number}[], fill: string, stroke="none", sw=0) {
-    const d = pts.map(p=>`${fmt(p.x)},${fmt(p.y)}`).join(" ");
-    return `<polygon points="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
+    return `<polygon points="${pts.map(p=>`${fmt(p.x)},${fmt(p.y)}`).join(" ")}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
   }
   function ellipse(cx:number,cy:number,rx:number,ry:number,fill:string,stroke="none",sw=0) {
     return `<ellipse cx="${fmt(cx)}" cy="${fmt(cy)}" rx="${fmt(rx)}" ry="${fmt(ry)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
   }
-  function line(x1:number,y1:number,x2:number,y2:number,stroke:string,sw:number,cap="round") {
-    return `<line x1="${fmt(x1)}" y1="${fmt(y1)}" x2="${fmt(x2)}" y2="${fmt(y2)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="${cap}"/>`;
+  function lineEl(x1:number,y1:number,x2:number,y2:number,stroke:string,sw:number) {
+    return `<line x1="${fmt(x1)}" y1="${fmt(y1)}" x2="${fmt(x2)}" y2="${fmt(y2)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="round"/>`;
   }
 
-  // ── Stud renderer ────────────────────────────────────────────────────────
-  // Draws a realistic cylindrical stud: side strip + bottom rim + top cap + highlight
-  function drawStud(cx:number, cy:number, col:[string,string,string,string,string], isNew:boolean, scale=1): string {
-    const rx = STUD_RX*scale, ry = STUD_RY*scale, sh = STUD_CY_H*scale;
-    let s = "";
-    // Cylinder side (parallelogram approximating the curved side in iso)
-    s += polygon([
-      {x:cx-rx, y:cy},
-      {x:cx+rx, y:cy},
-      {x:cx+rx, y:cy-sh},
-      {x:cx-rx, y:cy-sh},
-    ], col[1], "#00000020", 0.4);
-    // Bottom rim ellipse (where cylinder meets top face of brick)
-    s += ellipse(cx, cy, rx, ry, col[2], "#00000020", 0.3);
-    // Top cap ellipse
-    s += ellipse(cx, cy-sh, rx, ry, col[3], "#00000030", 0.5);
-    // Highlight crescent on top
-    s += ellipse(cx-rx*0.25, cy-sh-ry*0.2, rx*0.45, ry*0.45, "rgba(255,255,255,0.35)", "none", 0);
-    if (isNew) {
-      s += ellipse(cx, cy-sh, rx+1.5, ry+1, "none", "#FFD700", 1.2);
+  // ── Auto-fit: compute bounding box of all geometry ───────────────────────
+  const W = 700, H = 540, PAD = 44;
+  const allRaw: {x:number;y:number}[] = [];
+
+  function addBox(col:number, row:number, layer:number, lh:number, cs:number, rs:number) {
+    for (const [dc,dr] of [[0,0],[cs,0],[cs,rs],[0,rs]] as const) {
+      const p = isoRaw(col+dc, row+dr, layer, lh);
+      allRaw.push(p, {x:p.x, y:p.y+lh});
     }
-    return s;
+    // account for stud height above top face
+    const top = isoRaw(col+cs/2, row+rs/2, layer, lh);
+    allRaw.push({x:top.x, y:top.y - STUD_CY_H - 4});
   }
 
-  // ── Brick renderer ───────────────────────────────────────────────────────
-  function drawBrick(piece: any, isNew: boolean, ox: number, oy: number): string {
-    const col = getColor(piece.color);
-    const cols = piece.colSpan || 1;
-    const rows = piece.rowSpan || 1;
-    const layer = piece.layer || 1;
-    const lh = layerHeight(piece.part);
-    const tile = isTile(piece.part);
-    const round = isRound(piece.part);
-
-    const off = (p:{x:number;y:number}) => ({x: p.x+ox, y: p.y+oy});
-
-    // 8 corners: top face at (layer+1), bottom at (layer)
-    // Note: we use the SAME lh for the "top" calculation so stacking works correctly.
-    // The top face of a brick at layer L is at vertical position layer*(lh) up from base.
-    // We encode "top" as the surface: isoRaw(..., layer, lh) already gives the top surface
-    // if we treat layer as the *top* of this brick. To get the bottom we subtract lh.
-    const tl = off(isoRaw(piece.col,        piece.row,        layer, lh)); // top back-left
-    const tr = off(isoRaw(piece.col+cols,   piece.row,        layer, lh)); // top back-right
-    const tf = off(isoRaw(piece.col+cols,   piece.row+rows,   layer, lh)); // top front-right
-    const tfl= off(isoRaw(piece.col,        piece.row+rows,   layer, lh)); // top front-left
-    // bottom of brick = same coords but shifted down by lh px in Y (in screen space)
-    const bl = {x:tl.x, y:tl.y+lh};
-    const br = {x:tr.x, y:tr.y+lh};
-    const bf = {x:tf.x, y:tf.y+lh};
-    const bfl= {x:tfl.x,y:tfl.y+lh};
-
-    let s = "";
-
-    if (round && cols === 1 && rows === 1) {
-      // Round bricks/plates: draw as isometric cylinder approximation
-      const cx = (tl.x+tr.x+tf.x+tfl.x)/4;
-      const cy = (tl.y+tfl.y)/2;
-      const rx = CW*0.5, ry = CH*0.5;
-      // Side strip
-      s += polygon([{x:cx-rx,y:cy},{x:cx+rx,y:cy},{x:cx+rx,y:cy+lh},{x:cx-rx,y:cy+lh}], col[1], "#00000030", 0.5);
-      // Bottom ellipse
-      s += ellipse(cx, cy+lh, rx, ry, col[2], "#00000030", 0.5);
-      // Top ellipse
-      s += ellipse(cx, cy, rx, ry, col[0], "#00000040", 0.8);
-      // Top highlight
-      s += ellipse(cx-rx*0.2, cy-ry*0.2, rx*0.5, ry*0.5, "rgba(255,255,255,0.3)", "none", 0);
-      if (isNew) s += ellipse(cx, cy, rx+2, ry+1.5, "none", "#FFD700", 2);
-      return s;
-    }
-
-    // Left face (front-left visible face): tl, tfl, bfl, bl
-    s += polygon([tl,tfl,bfl,bl], col[1], "#00000020", 0.5);
-    // Right face (front-right visible face): tr, tf, bf, br
-    s += polygon([tr,tf,bf,br], col[2], "#00000020", 0.5);
-    // Top face: tl, tr, tf, tfl
-    s += polygon([tl,tr,tf,tfl], col[0], "#00000030", 0.7);
-
-    // New-piece highlight outline on top face
-    if (isNew) {
-      s += polygon([tl,tr,tf,tfl], "none", "#FFD700", 2.5);
-    }
-
-    // Studs (skip for tiles)
-    if (!tile) {
-      for (let dc = 0; dc < cols; dc++) {
-        for (let dr = 0; dr < rows; dr++) {
-          // Centre of this stud in grid space
-          const sc = off(isoRaw(piece.col+dc+0.5, piece.row+dr+0.5, layer, lh));
-          s += drawStud(sc.x, sc.y, col, isNew);
-        }
-      }
-    }
-
-    return s;
-  }
-
-  // ── Arrow renderer ───────────────────────────────────────────────────────
-  function drawArrow(piece: any, ox: number, oy: number): string {
-    const lh = layerHeight(piece.part);
-    const cols = piece.colSpan || 1, rows = piece.rowSpan || 1;
-    // Arrow tip hovers above the centre of the piece's top face
-    const raw = isoRaw(piece.col+cols/2, piece.row+rows/2, (piece.layer||1), lh);
-    const cx = raw.x + ox, cy = raw.y + oy - STUD_CY_H - 6;
-    const arrowLen = 22, headH = 10, headW = 9;
-    return `
-      ${line(cx, cy-arrowLen, cx, cy-headH, "#FFD700", 3)}
-      <polygon points="${fmt(cx)},${fmt(cy)} ${fmt(cx-headW)},${fmt(cy-headH)} ${fmt(cx+headW)},${fmt(cy-headH)}" fill="#FFD700"/>
-    `;
-  }
-
-  // ── Baseplate size ───────────────────────────────────────────────────────
+  // Parse baseplate
   let bpCols = 16, bpRows = 16;
   if (baseplateSize) {
     const m = baseplateSize.match(/(\d+)\s*x\s*(\d+)/i);
     if (m) { bpCols = parseInt(m[1]); bpRows = parseInt(m[2]); }
   }
 
-  // ── Auto-fit: compute bounding box in raw iso space ──────────────────────
-  // We project all piece corners (plus baseplate corners) to find min/max x/y,
-  // then compute a scale and offset to fill the canvas with padding.
-  const W = 700, H = 520, PAD = 40;
-
-  // Collect all corner points in raw iso coords
-  const allRaw: {x:number;y:number}[] = [];
-  function addCorners(col:number, row:number, layer:number, lh:number, colSpan:number, rowSpan:number) {
-    for (const [dc,dr] of [[0,0],[colSpan,0],[colSpan,rowSpan],[0,rowSpan]]) {
-      const p = isoRaw(col+dc, row+dr, layer, lh);
-      allRaw.push(p);
-      allRaw.push({x:p.x, y:p.y+lh}); // bottom of brick too
-    }
-  }
-
-  if (hasBaseplate) {
-    addCorners(1, 1, 0, BRICK_Z, bpCols, bpRows);
-  }
-  for (const p of placedPieces) {
-    const lh = layerHeight(p.part);
-    addCorners(p.col||1, p.row||1, p.layer||1, lh, p.colSpan||1, p.rowSpan||1);
-    // Also account for studs above the top face
-    allRaw.push({x: isoRaw((p.col||1)+(p.colSpan||1)/2, (p.row||1)+(p.rowSpan||1)/2, p.layer||1, lh).x,
-                 y: isoRaw((p.col||1)+(p.colSpan||1)/2, (p.row||1)+(p.rowSpan||1)/2, p.layer||1, lh).y - STUD_CY_H - 30});
-  }
+  if (hasBaseplate) addBox(1, 1, 0, BRICK_Z, bpCols, bpRows);
+  for (const p of placedPieces) addBox(p.col||1, p.row||1, p.layer||1, lhOf(p.part), p.colSpan||1, p.rowSpan||1);
 
   if (allRaw.length === 0) {
-    // Fallback: empty scene
     return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="#fff"/></svg>`;
   }
 
@@ -260,152 +125,147 @@ function renderStepSVG(params: {
   const rawMaxX = Math.max(...allRaw.map(p=>p.x));
   const rawMinY = Math.min(...allRaw.map(p=>p.y));
   const rawMaxY = Math.max(...allRaw.map(p=>p.y));
-
   const rawW = rawMaxX - rawMinX || 1;
   const rawH = rawMaxY - rawMinY || 1;
+  const scale = Math.min((W-PAD*2)/rawW, (H-PAD*2)/rawH, 1.8);
+  const ox = PAD + (W-PAD*2 - rawW*scale)/2 - rawMinX*scale;
+  const oy = PAD + (H-PAD*2 - rawH*scale)/2 - rawMinY*scale;
 
-  // Scale to fill canvas with padding
-  const scaleX = (W - PAD*2) / rawW;
-  const scaleY = (H - PAD*2) / rawH;
-  const scale  = Math.min(scaleX, scaleY, 1.8); // cap at 1.8× to avoid over-zoom on tiny builds
-
-  // Offset so the scene is centred
-  const ox = PAD + (W - PAD*2 - rawW*scale)/2 - rawMinX*scale;
-  const oy = PAD + (H - PAD*2 - rawH*scale)/2 - rawMinY*scale;
-
-  // Scaled iso projection
   function isoS(col:number, row:number, layer:number, lh:number) {
-    const raw = isoRaw(col, row, layer, lh);
-    return { x: raw.x*scale + ox, y: raw.y*scale + oy };
+    const r = isoRaw(col, row, layer, lh);
+    return { x: r.x*scale + ox, y: r.y*scale + oy };
   }
 
-  // ── Generate defs (gradient ids) ─────────────────────────────────────────
-  // We'll use inline fills only (no SVG defs needed for gradients in our approach)
+  // ── Draw list: collect all faces + studs with depth values ───────────────
+  // Depth formula: layer * 1000 ensures layer beats col+row.
+  // Within a layer, we use the col+row of the relevant face's centroid.
+  // Left face  → centroid at (col,          row+rows/2) → depth = col + row+rows/2
+  // Right face → centroid at (col+cols,      row+rows/2) → depth = col+cols + row+rows/2
+  // Top face   → centroid at (col+cols/2,    row+rows/2) → depth = col+cols/2 + row+rows/2 + 0.5
+  // Studs      → same as top + tiny epsilon to appear above top face
+  interface DrawItem { depth: number; svg: string; }
+  const items: DrawItem[] = [];
 
-  // ── Sort pieces: painter's algorithm ─────────────────────────────────────
-  const sorted = [...placedPieces].sort((a,b) => {
-    // layer ascending first
-    const la = a.layer||1, lb = b.layer||1;
-    if (la !== lb) return la - lb;
-    // then iso depth: larger (col+row) = closer to viewer
-    const da = (a.col||1) + (a.row||1);
-    const db = (b.col||1) + (b.row||1);
-    return da - db;
-  });
+  function add(depth:number, svg:string) { items.push({depth, svg}); }
 
-  // ── Build SVG body ───────────────────────────────────────────────────────
-  let body = "";
-
-  // Baseplate
+  // ── Baseplate ────────────────────────────────────────────────────────────
   if (hasBaseplate) {
     const BC: [string,string,string,string,string] = ["#5DC85D","#2E7D32","#388E3C","#4CAF50","#1B5E20"];
-    const off2 = (p:{x:number;y:number}) => ({x:p.x*scale+ox, y:p.y*scale+oy});
-    const tl = off2(isoRaw(1,      1,      0, BRICK_Z));
-    const tr = off2(isoRaw(1+bpCols,1,     0, BRICK_Z));
-    const tf = off2(isoRaw(1+bpCols,1+bpRows,0,BRICK_Z));
-    const tfl= off2(isoRaw(1,      1+bpRows,0, BRICK_Z));
-    const bl = {x:tl.x, y:tl.y+3*scale};
-    const br = {x:tr.x, y:tr.y+3*scale};
-    const bf = {x:tf.x, y:tf.y+3*scale};
-    const bfl= {x:tfl.x,y:tfl.y+3*scale};
-
-    body += polygon([tl,tfl,bfl,bl], BC[2], "#1B5E2040", 0.5);
-    body += polygon([tr,tf,bf,br],   BC[1], "#1B5E2040", 0.5);
-    body += polygon([tl,tr,tf,tfl],  BC[0], "#1B5E2040", 0.8);
-
-    // Stud grid — skip if too zoomed out (scale < 0.6) to avoid clutter
-    if (scale >= 0.5) {
-      for (let dc = 0; dc < bpCols; dc++) {
-        for (let dr = 0; dr < bpRows; dr++) {
-          const sc = off2(isoRaw(1+dc+0.5, 1+dr+0.5, 0.1, BRICK_Z));
-          body += ellipse(sc.x, sc.y, 3.5*scale, 2*scale, BC[4], "#1B5E2040", 0.3);
+    const tl = isoS(1,        1,        0, BRICK_Z);
+    const tr = isoS(1+bpCols, 1,        0, BRICK_Z);
+    const tf = isoS(1+bpCols, 1+bpRows, 0, BRICK_Z);
+    const tfl= isoS(1,        1+bpRows, 0, BRICK_Z);
+    const edgePx = 3 * scale;
+    const bl={x:tl.x,y:tl.y+edgePx}, br={x:tr.x,y:tr.y+edgePx};
+    const bf={x:tf.x,y:tf.y+edgePx}, bfl={x:tfl.x,y:tfl.y+edgePx};
+    // Draw baseplate at depth=-9999 so it's always behind everything
+    add(-9999, polygon([tl,tfl,bfl,bl], BC[2], "#1B5E2040", 0.6));
+    add(-9998, polygon([tr,tf,bf,br],   BC[1], "#1B5E2040", 0.6));
+    add(-9997, polygon([tl,tr,tf,tfl],  BC[0], "#1B5E2040", 0.9));
+    // Stud grid
+    if (scale >= 0.45) {
+      for (let dc=0; dc<bpCols; dc++) {
+        for (let dr=0; dr<bpRows; dr++) {
+          const sc = isoS(1+dc+0.5, 1+dr+0.5, 0.08, BRICK_Z);
+          add(-9996 + dc*0.01 + dr*0.0001,
+            ellipse(sc.x, sc.y, 3.2*scale, 1.8*scale, BC[4], "#1B5E2040", 0.3));
         }
       }
     }
   }
 
-  // Bricks — using scaled version of drawBrick
-  // We redefine drawBrick inline to use isoS instead of isoRaw+offset
-  for (const piece of sorted) {
+  // ── Brick faces ──────────────────────────────────────────────────────────
+  for (const piece of placedPieces) {
     const col2 = getColor(piece.color);
     const cols = piece.colSpan || 1;
     const rows = piece.rowSpan || 1;
     const layer = piece.layer || 1;
-    const lh = layerHeight(piece.part);
+    const lh = lhOf(piece.part);
     const tile = isTile(piece.part);
     const round = isRound(piece.part);
     const isNew = newPieceIds.includes(piece.id);
-
-    const tl = isoS(piece.col,      piece.row,      layer, lh);
-    const tr = isoS(piece.col+cols, piece.row,      layer, lh);
-    const tf = isoS(piece.col+cols, piece.row+rows, layer, lh);
-    const tfl= isoS(piece.col,      piece.row+rows, layer, lh);
     const lhS = lh * scale;
-    const bl = {x:tl.x, y:tl.y+lhS};
-    const br = {x:tr.x, y:tr.y+lhS};
-    const bf = {x:tf.x, y:tf.y+lhS};
-    const bfl= {x:tfl.x,y:tfl.y+lhS};
+    const L = layer * 1000; // layer multiplier
+
+    const tl  = isoS(piece.col,       piece.row,       layer, lh);
+    const tr  = isoS(piece.col+cols,  piece.row,       layer, lh);
+    const tf  = isoS(piece.col+cols,  piece.row+rows,  layer, lh);
+    const tfl = isoS(piece.col,       piece.row+rows,  layer, lh);
+    const bl  = {x:tl.x,  y:tl.y+lhS};
+    const br  = {x:tr.x,  y:tr.y+lhS};
+    const bf  = {x:tf.x,  y:tf.y+lhS};
+    const bfl = {x:tfl.x, y:tfl.y+lhS};
 
     if (round && cols===1 && rows===1) {
-      const cx = (tl.x+tr.x+tf.x+tfl.x)/4;
-      const cy = (tl.y+tfl.y)/2;
-      const rx = CW*scale*0.5, ry = CH*scale*0.5;
-      body += polygon([{x:cx-rx,y:cy},{x:cx+rx,y:cy},{x:cx+rx,y:cy+lhS},{x:cx-rx,y:cy+lhS}], col2[1], "#00000030", 0.5);
-      body += ellipse(cx, cy+lhS, rx, ry, col2[2], "#00000030", 0.5);
-      body += ellipse(cx, cy, rx, ry, col2[0], "#00000040", 0.8);
-      body += ellipse(cx-rx*0.2, cy-ry*0.25, rx*0.5, ry*0.5, "rgba(255,255,255,0.3)", "none", 0);
-      if (isNew) body += ellipse(cx, cy, rx+2, ry+1.5, "none", "#FFD700", 2);
+      // Round bricks: cylinder approximation
+      const cx=(tl.x+tr.x+tf.x+tfl.x)/4, cy=(tl.y+tfl.y)/2;
+      const rx=CW*scale*0.5, ry=CH*scale*0.5;
+      const cDepth = L + piece.col + piece.row + 0.5;
+      add(cDepth-0.3, polygon([{x:cx-rx,y:cy},{x:cx+rx,y:cy},{x:cx+rx,y:cy+lhS},{x:cx-rx,y:cy+lhS}], col2[1], "#00000030", 0.5));
+      add(cDepth-0.1, ellipse(cx, cy+lhS, rx, ry, col2[2], "#00000030", 0.5));
+      add(cDepth,     ellipse(cx, cy,     rx, ry, col2[0], "#00000040", 0.8));
+      add(cDepth+0.1, ellipse(cx-rx*0.2, cy-ry*0.25, rx*0.5, ry*0.5, "rgba(255,255,255,0.3)"));
+      if (isNew) add(cDepth+0.2, ellipse(cx, cy, rx+2, ry+1.5, "none", "#FFD700", 2));
       continue;
     }
 
-    // Left face
-    body += polygon([tl,tfl,bfl,bl], col2[1], "#00000020", 0.5);
-    // Right face
-    body += polygon([tr,tf,bf,br], col2[2], "#00000020", 0.5);
-    // Top face
-    body += polygon([tl,tr,tf,tfl], col2[0], "#00000030", 0.7);
-    // Edge highlight on top (thin lighter line along back edges for depth)
-    body += `<polyline points="${fmt(tl.x)},${fmt(tl.y)} ${fmt(tr.x)},${fmt(tr.y)} ${fmt(tf.x)},${fmt(tf.y)}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>`;
+    // Left face: spans col=piece.col edge, rows piece.row..piece.row+rows
+    // centroid col+row = piece.col + (piece.row + rows/2)
+    const leftDepth  = L + piece.col           + piece.row + rows/2;
+    // Right face: spans col=piece.col+cols edge
+    const rightDepth = L + piece.col + cols     + piece.row + rows/2;
+    // Top face: centroid
+    const topDepth   = L + piece.col + cols/2  + piece.row + rows/2 + 0.5;
 
-    if (isNew) body += polygon([tl,tr,tf,tfl], "none", "#FFD700", 2.5);
+    add(leftDepth,  polygon([tl,tfl,bfl,bl], col2[1], "#00000020", 0.5));
+    add(rightDepth, polygon([tr,tf,bf,br],   col2[2], "#00000020", 0.5));
+
+    let topSvg = polygon([tl,tr,tf,tfl], col2[0], "#00000030", 0.7);
+    // Subtle edge highlight
+    topSvg += `<polyline points="${fmt(tl.x)},${fmt(tl.y)} ${fmt(tr.x)},${fmt(tr.y)} ${fmt(tf.x)},${fmt(tf.y)}" fill="none" stroke="rgba(255,255,255,0.22)" stroke-width="0.8"/>`;
+    if (isNew) topSvg += polygon([tl,tr,tf,tfl], "none", "#FFD700", 2.5);
+    add(topDepth, topSvg);
 
     // Studs
-    if (!tile && scale >= 0.4) {
-      for (let dc = 0; dc < cols; dc++) {
-        for (let dr = 0; dr < rows; dr++) {
+    if (!tile && scale >= 0.35) {
+      for (let dc=0; dc<cols; dc++) {
+        for (let dr=0; dr<rows; dr++) {
           const sc = isoS(piece.col+dc+0.5, piece.row+dr+0.5, layer, lh);
           const rx = STUD_RX*scale, ry = STUD_RY*scale, sh = STUD_CY_H*scale;
-          // Cylinder side
-          body += polygon([
-            {x:sc.x-rx, y:sc.y},
-            {x:sc.x+rx, y:sc.y},
-            {x:sc.x+rx, y:sc.y-sh},
-            {x:sc.x-rx, y:sc.y-sh},
-          ], col2[1], "#00000020", 0.3);
+          const sDepth = L + piece.col+dc+0.5 + piece.row+dr+0.5 + 1.5;
+          let sv = "";
+          // Cylinder side strip
+          sv += polygon([{x:sc.x-rx,y:sc.y},{x:sc.x+rx,y:sc.y},{x:sc.x+rx,y:sc.y-sh},{x:sc.x-rx,y:sc.y-sh}], col2[1], "#00000020", 0.3);
           // Bottom rim
-          body += ellipse(sc.x, sc.y, rx, ry, col2[2], "#00000020", 0.3);
+          sv += ellipse(sc.x, sc.y, rx, ry, col2[2], "#00000020", 0.3);
           // Top cap
-          body += ellipse(sc.x, sc.y-sh, rx, ry, col2[3], "#00000030", 0.5);
-          // Highlight crescent
-          body += ellipse(sc.x-rx*0.25, sc.y-sh-ry*0.2, rx*0.45, ry*0.45, "rgba(255,255,255,0.35)", "none", 0);
-          if (isNew) body += ellipse(sc.x, sc.y-sh, rx+1.5, ry+1, "none", "#FFD700", 1.2);
+          sv += ellipse(sc.x, sc.y-sh, rx, ry, col2[3], "#00000030", 0.5);
+          // Specular highlight
+          sv += ellipse(sc.x-rx*0.25, sc.y-sh-ry*0.2, rx*0.45, ry*0.45, "rgba(255,255,255,0.35)");
+          if (isNew) sv += ellipse(sc.x, sc.y-sh, rx+1.5, ry+1, "none", "#FFD700", 1.2);
+          add(sDepth + dc*0.01 + dr*0.001, sv);
         }
       }
     }
   }
 
-  // Arrows above new pieces
+  // ── Sort by depth (ascending = back/bottom drawn first) ──────────────────
+  items.sort((a,b) => a.depth - b.depth);
+
+  // ── Arrows for new pieces (always on top) ────────────────────────────────
+  const newPiecesSvg: string[] = [];
   for (const piece of placedPieces.filter(p => newPieceIds.includes(p.id))) {
-    const lh = layerHeight(piece.part);
+    const lh = lhOf(piece.part);
     const cols = piece.colSpan||1, rows = piece.rowSpan||1;
     const sc = isoS(piece.col+cols/2, piece.row+rows/2, piece.layer||1, lh);
-    const cx = sc.x, cy = sc.y - STUD_CY_H*scale - 4;
-    const aLen = 20, hH = 10, hW = 8;
-    body += line(cx, cy-aLen, cx, cy-hH, "#FFD700", 3);
-    body += `<polygon points="${fmt(cx)},${fmt(cy)} ${fmt(cx-hW)},${fmt(cy-hH)} ${fmt(cx+hW)},${fmt(cy-hH)}" fill="#FFD700"/>`;
+    const cx = sc.x, cy = sc.y - STUD_CY_H*scale - 6;
+    newPiecesSvg.push(lineEl(cx, cy-22, cx, cy-10, "#FFD700", 3));
+    newPiecesSvg.push(`<polygon points="${fmt(cx)},${fmt(cy)} ${fmt(cx-8)},${fmt(cy-10)} ${fmt(cx+8)},${fmt(cy-10)}" fill="#FFD700"/>`);
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="background:#fff">
+  const body = items.map(i=>i.svg).join("") + newPiecesSvg.join("");
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
   <rect width="${W}" height="${H}" fill="#FAFAFA"/>
   ${body}
 </svg>`;

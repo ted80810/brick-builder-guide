@@ -6,171 +6,186 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
-function detectBaseplate(allPages: any[]): { present: boolean; description: string } {
-  const baseplateKeywords = ["baseplate", "base plate", "building plate", "green plate", "flat plate"];
-  for (const page of allPages) {
-    const text = `${page.title} ${page.instructions} ${JSON.stringify(page.partsNeeded)}`.toLowerCase();
-    if (baseplateKeywords.some((kw) => text.includes(kw))) {
-      const desc = page.partsNeeded
-        ? (Array.isArray(page.partsNeeded)
-            ? page.partsNeeded
-                .filter((p: any) => {
-                  const s = (typeof p === "string" ? p : `${p.color} ${p.part}`).toLowerCase();
-                  return baseplateKeywords.some((kw) => s.includes(kw));
-                })
-                .map((p: any) => (typeof p === "string" ? p : `${p.color} ${p.part}`))
-                .join(", ")
-            : "")
-        : "";
-      return { present: true, description: desc || "baseplate" };
+
+// Render a step as an SVG string — fully deterministic, no AI involved
+function renderStepSVG(params: {
+  placedPieces: any[];
+  newPieceIds: number[];
+  hasBaseplate: boolean;
+  baseplateSize: string | null;
+  stepNumber: number;
+  stepTitle: string;
+}): string {
+  const { placedPieces, newPieceIds, hasBaseplate, baseplateSize, stepNumber, stepTitle } = params;
+
+  const W = 640, H = 480;
+  const ox = W / 2, oy = H * 0.52;
+
+  const CELL_W = 28, CELL_H = 16, BRICK_H = 24, PLATE_H = 8, STUD_H = 5;
+
+  const LEGO_COLORS: Record<string, { top: string; front: string; side: string; stud: string }> = {
+    "Red":           { top: "#C91A09", front: "#9C1408", side: "#720E06", stud: "#A01207" },
+    "Blue":          { top: "#0057A6", front: "#004D96", side: "#003F7A", stud: "#004080" },
+    "Dark Blue":     { top: "#003152", front: "#002844", side: "#001F36", stud: "#002040" },
+    "Yellow":        { top: "#F2CD37", front: "#D4B000", side: "#C4A500", stud: "#B89800" },
+    "Green":         { top: "#00852B", front: "#006B22", side: "#005C1E", stud: "#004D18" },
+    "Dark Green":    { top: "#184632", front: "#123826", side: "#0D2C1E", stud: "#0A2218" },
+    "Orange":        { top: "#FE8A18", front: "#E07500", side: "#CC6A00", stud: "#B85E00" },
+    "White":         { top: "#FFFFFF", front: "#D8D8D8", side: "#C0C0C0", stud: "#AAAAAA" },
+    "Black":         { top: "#1B2A34", front: "#121E24", side: "#0D151A", stud: "#080E12" },
+    "Light Gray":    { top: "#9BA19B", front: "#7D847D", side: "#6C726C", stud: "#5E645E" },
+    "Dark Gray":     { top: "#6C6E68", front: "#525450", side: "#3E3F3C", stud: "#323330" },
+    "Brown":         { top: "#583927", front: "#4A2F20", side: "#3C261A", stud: "#301A10" },
+    "Tan":           { top: "#E4CD9E", front: "#CAAD7A", side: "#B8A06C", stud: "#A08C58" },
+    "Reddish Brown": { top: "#82422A", front: "#6E3622", side: "#5A2C1A", stud: "#4A2214" },
+    "Lime Green":    { top: "#BBE90B", front: "#A0C800", side: "#8CB000", stud: "#789800" },
+    "Sand Green":    { top: "#789B73", front: "#617D5C", side: "#4E6649", stud: "#3E5238" },
+    "Coral":         { top: "#FF698F", front: "#E84E74", side: "#CC3D62", stud: "#B83058" },
+    "Medium Azure":  { top: "#36AEBF", front: "#2A98A8", side: "#228090", stud: "#1A6870" },
+    "Lavender":      { top: "#E1D5ED", front: "#C8B8D8", side: "#B09EC4", stud: "#9080A8" },
+    "Dark Purple":   { top: "#3F1F5B", front: "#32184C", side: "#280E3C", stud: "#1E0A2E" },
+    "Dark Red":      { top: "#720E0E", front: "#5C0C0C", side: "#4A0808", stud: "#380606" },
+  };
+
+  function getColor(name: string) {
+    const key = Object.keys(LEGO_COLORS).find((k) => k.toLowerCase() === (name || "").toLowerCase());
+    return key ? LEGO_COLORS[key] : LEGO_COLORS["Light Gray"];
+  }
+
+  function isPlate(partName: string) {
+    const n = (partName || "").toLowerCase();
+    return n.includes("plate") || n.includes("tile");
+  }
+
+  function iso(col: number, row: number, layer: number, lh: number) {
+    return {
+      x: (col - row) * (CELL_W / 2),
+      y: (col + row) * (CELL_H / 2) - layer * lh,
+    };
+  }
+
+  function off(p: { x: number; y: number }) {
+    return { x: p.x + ox, y: p.y + oy };
+  }
+
+  function poly(pts: { x: number; y: number }[], fill: string, stroke = "#00000033", sw = 0.8) {
+    return `<polygon points="${pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+  }
+
+  function drawBrick(piece: any, isNew: boolean): string {
+    const c = getColor(piece.color);
+    const cols = piece.colSpan || 1;
+    const rows = piece.rowSpan || 1;
+    const layer = piece.layer || 1;
+    const lh = isPlate(piece.part) ? PLATE_H : BRICK_H;
+    const topL = layer + 1;
+
+    const A = off(iso(piece.col, piece.row, topL, lh));
+    const B = off(iso(piece.col + cols, piece.row, topL, lh));
+    const C = off(iso(piece.col + cols, piece.row + rows, topL, lh));
+    const D = off(iso(piece.col, piece.row + rows, topL, lh));
+    const E = off(iso(piece.col, piece.row, layer, lh));
+    const F = off(iso(piece.col + cols, piece.row, layer, lh));
+    const G = off(iso(piece.col + cols, piece.row + rows, layer, lh));
+    const H = off(iso(piece.col, piece.row + rows, layer, lh));
+
+    let s = "";
+    s += poly([A, D, H, E], c.side);        // left face
+    s += poly([B, C, G, F], c.front);       // right face
+    s += poly([A, B, C, D], c.top);         // top face
+
+    if (isNew) {
+      s += poly([A, B, C, D], "none", "#FFD700", 2.5);
     }
+
+    // Studs
+    for (let dc = 0; dc < cols; dc++) {
+      for (let dr = 0; dr < rows; dr++) {
+        const sc = off(iso(piece.col + dc + 0.5, piece.row + dr + 0.5, topL, lh));
+        const rx = (CELL_W / 2) * 0.36, ry = (CELL_H / 2) * 0.36;
+        // Stud body
+        s += poly(
+          [
+            { x: sc.x - rx, y: sc.y },
+            { x: sc.x + rx, y: sc.y },
+            { x: sc.x + rx, y: sc.y - STUD_H },
+            { x: sc.x - rx, y: sc.y - STUD_H },
+          ],
+          c.side, "#00000022"
+        );
+        // Stud top
+        s += `<ellipse cx="${sc.x.toFixed(1)}" cy="${(sc.y - STUD_H).toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${c.stud}" stroke="#00000033" stroke-width="0.5"/>`;
+        if (isNew) {
+          s += `<ellipse cx="${sc.x.toFixed(1)}" cy="${(sc.y - STUD_H).toFixed(1)}" rx="${(rx + 1.5).toFixed(1)}" ry="${(ry + 1).toFixed(1)}" fill="none" stroke="#FFD700" stroke-width="1"/>`;
+        }
+      }
+    }
+    return s;
   }
-  return { present: false, description: "" };
-}
 
-function buildCumulativeDescription(allPages: any[], currentPageNumber: number): string {
-  const priorSteps = allPages
-    .filter((p: any) => p.pageNumber < currentPageNumber)
-    .sort((a: any, b: any) => a.pageNumber - b.pageNumber);
-
-  const baseplate = detectBaseplate(allPages);
-
-  if (priorSteps.length === 0) {
-    return baseplate.present
-      ? `FIRST STEP — the only thing present is the ${baseplate.description}. Nothing else has been placed yet.`
-      : "FIRST STEP — nothing has been placed yet. There is no baseplate for this build.";
+  function drawArrow(piece: any): string {
+    const lh = isPlate(piece.part) ? PLATE_H : BRICK_H;
+    const cols = piece.colSpan || 1, rows = piece.rowSpan || 1;
+    const tip = off(iso(piece.col + cols / 2, piece.row + rows / 2, (piece.layer || 1) + 2, lh));
+    return `
+      <line x1="${tip.x.toFixed(1)}" y1="${(tip.y - 22).toFixed(1)}" x2="${tip.x.toFixed(1)}" y2="${(tip.y - 6).toFixed(1)}" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
+      <polygon points="${tip.x.toFixed(1)},${(tip.y - 2).toFixed(1)} ${(tip.x - 7).toFixed(1)},${(tip.y - 14).toFixed(1)} ${(tip.x + 7).toFixed(1)},${(tip.y - 14).toFixed(1)}" fill="#FFD700"/>
+    `;
   }
 
-  const descriptions = priorSteps.map((p: any) => {
-    const parts = Array.isArray(p.partsNeeded)
-      ? p.partsNeeded.map((pt: any) => typeof pt === "string" ? pt : `${pt.quantity}x ${pt.color} ${pt.part}`).join(", ")
-      : "";
-    return `Step ${p.pageNumber} ("${p.title}"): ${p.instructions} [Parts placed: ${parts}]`;
+  // Parse baseplate size
+  let bpCols = 16, bpRows = 16;
+  if (baseplateSize) {
+    const m = baseplateSize.match(/(\d+)x(\d+)/i);
+    if (m) { bpCols = parseInt(m[1]); bpRows = parseInt(m[2]); }
+  }
+
+  // Sort pieces back-to-front, bottom-to-top
+  const sorted = [...placedPieces].sort((a, b) => {
+    if (a.layer !== b.layer) return a.layer - b.layer;
+    return (a.col + a.row) - (b.col + b.row);
   });
 
-  const baseplateNote = baseplate.present
-    ? `BASEPLATE: A ${baseplate.description} was introduced in this build and must remain visible in every step image as the permanent foundation.\n\n`
-    : "";
+  let body = "";
 
-  return `${baseplateNote}Steps completed so far (${priorSteps.length} of ${priorSteps.length + 1} total up to this point):\n${descriptions.join("\n")}`;
-}
+  // Baseplate
+  if (hasBaseplate) {
+    const bc = { top: "#4CAF50", front: "#388E3C", side: "#2E7D32", stud: "#1B5E20" };
+    const A = off(iso(1, 1, 0, BRICK_H));
+    const B = off(iso(1 + bpCols, 1, 0, BRICK_H));
+    const C = off(iso(1 + bpCols, 1 + bpRows, 0, BRICK_H));
+    const D = off(iso(1, 1 + bpRows, 0, BRICK_H));
+    const E = off(iso(1, 1 + bpRows, -0.4, BRICK_H));
+    const F = off(iso(1 + bpCols, 1 + bpRows, -0.4, BRICK_H));
+    const G = off(iso(1 + bpCols, 1, -0.4, BRICK_H));
 
-async function generateStepImage(
-  title: string,
-  instructions: string,
-  newPartLabels: string[],
-  manualTitle: string,
-  apiKey: string,
-  stepNumber: number,
-  cumulativeContext: string,
-  placedPieces: any[],
-  newPieces: any[],
-  hasBaseplate: boolean,
-  baseplateSize: string | null,
-): Promise<string | null> {
-  try {
-    // Build an exact visual description of the current state
-    const placedDesc = placedPieces.length > 0
-      ? placedPieces.map((p: any) => {
-          const loc = p.orientation === "vertical"
-            ? `col ${p.col}, rows ${p.row}–${p.row + (p.rowSpan || 1) - 1}, layer ${p.layer}`
-            : `row ${p.row}, cols ${p.col}–${p.col + (p.colSpan || 1) - 1}, layer ${p.layer}`;
-          return `  • ${p.color} ${p.part} at ${loc}${p.note ? ` (${p.note})` : ""}`;
-        }).join("\n")
-      : "  (none yet)";
+    body += poly([A, B, C, D], bc.top, "#1B5E2055");
+    body += poly([D, C, F, E], bc.side, "#1B5E2055");
+    body += poly([B, C, F, G], bc.front, "#1B5E2055");
 
-    const newDesc = newPieces.length > 0
-      ? newPieces.map((p: any) => {
-          const loc = p.orientation === "vertical"
-            ? `col ${p.col}, rows ${p.row}–${p.row + (p.rowSpan || 1) - 1}, layer ${p.layer}`
-            : `row ${p.row}, cols ${p.col}–${p.col + (p.colSpan || 1) - 1}, layer ${p.layer}`;
-          return `  • ${p.color} ${p.part} at ${loc}`;
-        }).join("\n")
-      : newPartLabels.map((l: string) => `  • ${l}`).join("\n");
-
-    const baseplateNote = hasBaseplate
-      ? `A flat ${baseplateSize || "green"} LEGO baseplate covers the entire bottom. It must always be visible beneath all pieces.`
-      : "There is no baseplate — pieces sit directly on a flat surface.";
-
-    const prompt = `You are illustrating Step ${stepNumber} ("${title}") of an official LEGO instruction manual for "${manualTitle}".
-
-=== FOUNDATION ===
-${baseplateNote}
-
-=== COORDINATE SYSTEM (fixed — never change the camera angle between steps) ===
-Stud grid: front-left = col 1, row 1. Columns increase left→right. Rows increase front→back. Layers increase bottom→up. Camera angle: fixed isometric view, slightly above, looking at the front-left corner.
-
-=== ALL PIECES PRESENT AFTER THIS STEP (draw ALL of these) ===
-${placedDesc}
-
-=== NEW PIECES ADDED IN THIS STEP (highlight these in yellow) ===
-${newDesc}
-
-=== ILLUSTRATION RULES ===
-- Draw every piece listed above at its EXACT grid position — do not invent or move any piece
-- Each brick's stud count must match its size exactly (e.g. a 2x4 brick has 2 rows × 4 columns of studs)
-- Previously placed pieces: draw in their listed colors, slightly muted
-- New pieces: draw with a bright yellow outline/glow and placement arrows
-- ${hasBaseplate ? "The baseplate must be visible as the bottom layer in every image" : "No baseplate"}
-- White background, isometric 3D view, clean official LEGO manual style
-- NO text, NO step numbers, NO labels`;
-
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash-image",
-        messages: [{ role: "user", content: prompt }],
-        modalities: ["image", "text"],
-      }),
-    });
-
-    if (!response.ok) {
-      console.error("Image generation failed:", response.status);
-      return null;
+    // Stud grid on baseplate
+    for (let dc = 0; dc < bpCols; dc++) {
+      for (let dr = 0; dr < bpRows; dr++) {
+        const sc = off(iso(1 + dc + 0.5, 1 + dr + 0.5, 0.12, BRICK_H));
+        body += `<ellipse cx="${sc.x.toFixed(1)}" cy="${sc.y.toFixed(1)}" rx="3.8" ry="2.2" fill="${bc.stud}" stroke="#1B5E2033" stroke-width="0.3"/>`;
+      }
     }
-
-    const result = await response.json();
-    const imageData = result.choices?.[0]?.message?.images?.[0]?.image_url?.url;
-    return imageData || null;
-  } catch (error) {
-    console.error("Image generation error:", error);
-    return null;
   }
-}
 
-async function uploadImageToStorage(
-  supabase: any,
-  base64Data: string,
-  manualId: string,
-  pageNumber: number
-): Promise<string | null> {
-  try {
-    const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, "");
-    const binaryData = Uint8Array.from(atob(base64Content), (c) => c.charCodeAt(0));
-    const filePath = `${manualId}/step-${pageNumber}.png`;
-
-    const { error } = await supabase.storage
-      .from("manual-images")
-      .upload(filePath, binaryData, { contentType: "image/png", upsert: true });
-
-    if (error) {
-      console.error("Storage upload error:", error);
-      return null;
-    }
-
-    const { data: urlData } = supabase.storage
-      .from("manual-images")
-      .getPublicUrl(filePath);
-
-    return urlData?.publicUrl || null;
-  } catch (error) {
-    console.error("Upload error:", error);
-    return null;
+  // Bricks
+  for (const piece of sorted) {
+    body += drawBrick(piece, newPieceIds.includes(piece.id));
   }
+
+  // Arrows above new pieces
+  for (const piece of placedPieces.filter((p) => newPieceIds.includes(p.id))) {
+    body += drawArrow(piece);
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
+  <rect width="${W}" height="${H}" fill="#FFFFFF"/>
+  ${body}
+</svg>`;
 }
 
 serve(async (req) => {
@@ -477,26 +492,31 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
         const placedIds = placedPieceIdsByStep[i] || [];
         const placedPieces = finishedPieces.filter((p: any) => placedIds.includes(p.id));
 
-        const base64Image = await generateStepImage(
-          page.title,
-          page.instructions,
-          newPieces.map((p: any) => `${p.color} ${p.part}`),
-          manual.title,
-          LOVABLE_API_KEY,
-          page.pageNumber,
-          buildCumulativeDescription(allPages, page.pageNumber),
+        // Render deterministically — no AI involved
+        const svgString = renderStepSVG({
           placedPieces,
-          newPieces,
-          modelDesign.hasBaseplate,
-          modelDesign.baseplateSize,
-        );
+          newPieceIds,
+          hasBaseplate: modelDesign.hasBaseplate,
+          baseplateSize: modelDesign.baseplateSize,
+          stepNumber: page.pageNumber,
+          stepTitle: page.title,
+        });
 
-        if (base64Image) {
-          const publicUrl = await uploadImageToStorage(supabase, base64Image, manualId, page.pageNumber);
-          if (publicUrl) {
-            page.imageUrl = publicUrl;
-            console.log(`Image generated for step ${page.pageNumber}`);
+        // Upload SVG to storage
+        const svgBytes = new TextEncoder().encode(svgString);
+        const filePath = `${manualId}/step-${page.pageNumber}.svg`;
+        const { error: uploadErr } = await supabase.storage
+          .from("manual-images")
+          .upload(filePath, svgBytes, { contentType: "image/svg+xml", upsert: true });
+
+        if (!uploadErr) {
+          const { data: urlData } = supabase.storage.from("manual-images").getPublicUrl(filePath);
+          if (urlData?.publicUrl) {
+            page.imageUrl = urlData.publicUrl;
+            console.log(`SVG rendered for step ${page.pageNumber}`);
           }
+        } else {
+          console.error(`SVG upload failed for step ${page.pageNumber}:`, uploadErr);
         }
       } catch (imgError) {
         console.error(`Image generation failed for step ${page.pageNumber}:`, imgError);

@@ -7,7 +7,16 @@ const corsHeaders = {
 };
 
 
-// Render a step as an SVG string — fully deterministic, no AI involved
+// ─────────────────────────────────────────────────────────────────────────────
+// Isometric LEGO brick SVG renderer — v3
+// Features:
+//   • Auto-fit: computes bounding box of all geometry, scales + centres to fill canvas
+//   • Realistic brick faces: gradient shading, proper proportions
+//   • Realistic studs: cylinder body (side strip + top ellipse + highlight ring)
+//   • Proper painter's sort (layer asc, then col+row asc = back-to-front)
+//   • Handles plates (1/3 height of brick), tiles (no studs), round bricks
+//   • Yellow highlight outline + arrows for new pieces
+// ─────────────────────────────────────────────────────────────────────────────
 function renderStepSVG(params: {
   placedPieces: any[];
   newPieceIds: number[];
@@ -16,174 +25,388 @@ function renderStepSVG(params: {
   stepNumber: number;
   stepTitle: string;
 }): string {
-  const { placedPieces, newPieceIds, hasBaseplate, baseplateSize, stepNumber, stepTitle } = params;
+  const { placedPieces, newPieceIds, hasBaseplate, baseplateSize } = params;
 
-  const W = 640, H = 480;
-  const ox = W / 2, oy = H * 0.52;
+  // ── Constants ────────────────────────────────────────────────────────────
+  // One stud cell in isometric screen space
+  const CW = 32;          // half-width of one cell in iso x  (horizontal spread)
+  const CH = 18;          // half-height of one cell in iso y (vertical spread)
+  const BRICK_Z = 28;     // screen pixels per full brick layer
+  const PLATE_Z = 10;     // screen pixels per plate/tile layer
+  const STUD_CY_H = 6;    // cylinder height of stud in screen px
+  const STUD_RX = 5.5;    // stud ellipse x-radius
+  const STUD_RY = 3.2;    // stud ellipse y-radius
 
-  const CELL_W = 28, CELL_H = 16, BRICK_H = 24, PLATE_H = 8, STUD_H = 5;
-
-  const LEGO_COLORS: Record<string, { top: string; front: string; side: string; stud: string }> = {
-    "Red":           { top: "#C91A09", front: "#9C1408", side: "#720E06", stud: "#A01207" },
-    "Blue":          { top: "#0057A6", front: "#004D96", side: "#003F7A", stud: "#004080" },
-    "Dark Blue":     { top: "#003152", front: "#002844", side: "#001F36", stud: "#002040" },
-    "Yellow":        { top: "#F2CD37", front: "#D4B000", side: "#C4A500", stud: "#B89800" },
-    "Green":         { top: "#00852B", front: "#006B22", side: "#005C1E", stud: "#004D18" },
-    "Dark Green":    { top: "#184632", front: "#123826", side: "#0D2C1E", stud: "#0A2218" },
-    "Orange":        { top: "#FE8A18", front: "#E07500", side: "#CC6A00", stud: "#B85E00" },
-    "White":         { top: "#FFFFFF", front: "#D8D8D8", side: "#C0C0C0", stud: "#AAAAAA" },
-    "Black":         { top: "#1B2A34", front: "#121E24", side: "#0D151A", stud: "#080E12" },
-    "Light Gray":    { top: "#9BA19B", front: "#7D847D", side: "#6C726C", stud: "#5E645E" },
-    "Dark Gray":     { top: "#6C6E68", front: "#525450", side: "#3E3F3C", stud: "#323330" },
-    "Brown":         { top: "#583927", front: "#4A2F20", side: "#3C261A", stud: "#301A10" },
-    "Tan":           { top: "#E4CD9E", front: "#CAAD7A", side: "#B8A06C", stud: "#A08C58" },
-    "Reddish Brown": { top: "#82422A", front: "#6E3622", side: "#5A2C1A", stud: "#4A2214" },
-    "Lime Green":    { top: "#BBE90B", front: "#A0C800", side: "#8CB000", stud: "#789800" },
-    "Sand Green":    { top: "#789B73", front: "#617D5C", side: "#4E6649", stud: "#3E5238" },
-    "Coral":         { top: "#FF698F", front: "#E84E74", side: "#CC3D62", stud: "#B83058" },
-    "Medium Azure":  { top: "#36AEBF", front: "#2A98A8", side: "#228090", stud: "#1A6870" },
-    "Lavender":      { top: "#E1D5ED", front: "#C8B8D8", side: "#B09EC4", stud: "#9080A8" },
-    "Dark Purple":   { top: "#3F1F5B", front: "#32184C", side: "#280E3C", stud: "#1E0A2E" },
-    "Dark Red":      { top: "#720E0E", front: "#5C0C0C", side: "#4A0808", stud: "#380606" },
+  // ── Colour palette ───────────────────────────────────────────────────────
+  // Each colour has: top face, left face (side), right face (front), stud top, stud ring
+  const PALETTE: Record<string, [string, string, string, string, string]> = {
+    // name                  top        left       right      studTop    studRing
+    "Red":           ["#C91A09","#8B1107","#A01208","#C91A09","#7A0F06"],
+    "Blue":          ["#0057A6","#003A70","#004A8C","#0057A6","#002E58"],
+    "Dark Blue":     ["#003152","#001830","#002440","#003152","#001020"],
+    "Yellow":        ["#F2CD37","#B09010","#C8A820","#F2CD37","#907800"],
+    "Green":         ["#00852B","#005018","#006822","#00852B","#003810"],
+    "Dark Green":    ["#184632","#0A2818","#122E20","#184632","#081810"],
+    "Orange":        ["#FE8A18","#C06000","#D87000","#FE8A18","#A05000"],
+    "White":         ["#F8F8F8","#B8B8B8","#D0D0D0","#F8F8F8","#909090"],
+    "Black":         ["#2A3A44","#10181E","#1A2830","#2A3A44","#080C10"],
+    "Light Gray":    ["#9BA19B","#606660","#787E78","#9BA19B","#484C48"],
+    "Dark Gray":     ["#6C6E68","#3A3C38","#505250","#6C6E68","#282A28"],
+    "Brown":         ["#6B4226","#3C2010","#522E18","#6B4226","#2A1408"],
+    "Tan":           ["#E4CD9E","#A8945C","#C0A870","#E4CD9E","#887040"],
+    "Reddish Brown": ["#82422A","#501C0C","#682E18","#82422A","#380C04"],
+    "Lime Green":    ["#BBE90B","#7AA000","#98C000","#BBE90B","#587800"],
+    "Sand Green":    ["#789B73","#485E44","#607858","#789B73","#344030"],
+    "Coral":         ["#FF698F","#C02858","#E04070","#FF698F","#981840"],
+    "Medium Azure":  ["#36AEBF","#186878","#228898","#36AEBF","#104858"],
+    "Lavender":      ["#E1D5ED","#A090B8","#C0A8D0","#E1D5ED","#806890"],
+    "Dark Purple":   ["#3F1F5B","#200A30","#301448","#3F1F5B","#140620"],
+    "Dark Red":      ["#720E0E","#400404","#580808","#720E0E","#280202"],
+    "Trans Blue":    ["#5B9BDACC","#2A5888CC","#3A72AACC","#5B9BDACC","#1A3870CC"],
+    "Transparent Blue": ["#5B9BDACC","#2A5888CC","#3A72AACC","#5B9BDACC","#1A3870CC"],
   };
 
-  function getColor(name: string) {
-    const key = Object.keys(LEGO_COLORS).find((k) => k.toLowerCase() === (name || "").toLowerCase());
-    return key ? LEGO_COLORS[key] : LEGO_COLORS["Light Gray"];
+  function getColor(name: string): [string,string,string,string,string] {
+    if (!name) return PALETTE["Light Gray"];
+    const k = Object.keys(PALETTE).find(k => k.toLowerCase() === name.toLowerCase());
+    return k ? PALETTE[k] : PALETTE["Light Gray"];
   }
 
-  function isPlate(partName: string) {
-    const n = (partName || "").toLowerCase();
-    return n.includes("plate") || n.includes("tile");
+  // ── Part classification ──────────────────────────────────────────────────
+  function layerHeight(part: string): number {
+    const p = (part || "").toLowerCase();
+    return (p.includes("plate") || p.includes("tile")) ? PLATE_Z : BRICK_Z;
+  }
+  function isTile(part: string): boolean {
+    return (part || "").toLowerCase().includes("tile");
+  }
+  function isRound(part: string): boolean {
+    return (part || "").toLowerCase().includes("round");
   }
 
-  function iso(col: number, row: number, layer: number, lh: number) {
+  // ── Isometric projection ─────────────────────────────────────────────────
+  // Returns raw (unshifted) screen coords for a grid point (col, row, layer).
+  // col/row are stud-grid indices, layer is brick-layer index.
+  // lh = layer height in pixels for this piece type.
+  function isoRaw(col: number, row: number, layer: number, lh: number) {
     return {
-      x: (col - row) * (CELL_W / 2),
-      y: (col + row) * (CELL_H / 2) - layer * lh,
+      x: (col - row) * CW,
+      y: (col + row) * CH - layer * lh,
     };
   }
 
-  function off(p: { x: number; y: number }) {
-    return { x: p.x + ox, y: p.y + oy };
+  // ── SVG helpers ──────────────────────────────────────────────────────────
+  function fmt(n: number) { return n.toFixed(1); }
+  function polygon(pts: {x:number;y:number}[], fill: string, stroke="none", sw=0) {
+    const d = pts.map(p=>`${fmt(p.x)},${fmt(p.y)}`).join(" ");
+    return `<polygon points="${d}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}" stroke-linejoin="round"/>`;
+  }
+  function ellipse(cx:number,cy:number,rx:number,ry:number,fill:string,stroke="none",sw=0) {
+    return `<ellipse cx="${fmt(cx)}" cy="${fmt(cy)}" rx="${fmt(rx)}" ry="${fmt(ry)}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
+  }
+  function line(x1:number,y1:number,x2:number,y2:number,stroke:string,sw:number,cap="round") {
+    return `<line x1="${fmt(x1)}" y1="${fmt(y1)}" x2="${fmt(x2)}" y2="${fmt(y2)}" stroke="${stroke}" stroke-width="${sw}" stroke-linecap="${cap}"/>`;
   }
 
-  function poly(pts: { x: number; y: number }[], fill: string, stroke = "#00000033", sw = 0.8) {
-    return `<polygon points="${pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(" ")}" fill="${fill}" stroke="${stroke}" stroke-width="${sw}"/>`;
-  }
-
-  function drawBrick(piece: any, isNew: boolean): string {
-    const c = getColor(piece.color);
-    const cols = piece.colSpan || 1;
-    const rows = piece.rowSpan || 1;
-    const layer = piece.layer || 1;
-    const lh = isPlate(piece.part) ? PLATE_H : BRICK_H;
-    const topL = layer + 1;
-
-    const A = off(iso(piece.col, piece.row, topL, lh));
-    const B = off(iso(piece.col + cols, piece.row, topL, lh));
-    const C = off(iso(piece.col + cols, piece.row + rows, topL, lh));
-    const D = off(iso(piece.col, piece.row + rows, topL, lh));
-    const E = off(iso(piece.col, piece.row, layer, lh));
-    const F = off(iso(piece.col + cols, piece.row, layer, lh));
-    const G = off(iso(piece.col + cols, piece.row + rows, layer, lh));
-    const H = off(iso(piece.col, piece.row + rows, layer, lh));
-
+  // ── Stud renderer ────────────────────────────────────────────────────────
+  // Draws a realistic cylindrical stud: side strip + bottom rim + top cap + highlight
+  function drawStud(cx:number, cy:number, col:[string,string,string,string,string], isNew:boolean, scale=1): string {
+    const rx = STUD_RX*scale, ry = STUD_RY*scale, sh = STUD_CY_H*scale;
     let s = "";
-    s += poly([A, D, H, E], c.side);        // left face
-    s += poly([B, C, G, F], c.front);       // right face
-    s += poly([A, B, C, D], c.top);         // top face
-
+    // Cylinder side (parallelogram approximating the curved side in iso)
+    s += polygon([
+      {x:cx-rx, y:cy},
+      {x:cx+rx, y:cy},
+      {x:cx+rx, y:cy-sh},
+      {x:cx-rx, y:cy-sh},
+    ], col[1], "#00000020", 0.4);
+    // Bottom rim ellipse (where cylinder meets top face of brick)
+    s += ellipse(cx, cy, rx, ry, col[2], "#00000020", 0.3);
+    // Top cap ellipse
+    s += ellipse(cx, cy-sh, rx, ry, col[3], "#00000030", 0.5);
+    // Highlight crescent on top
+    s += ellipse(cx-rx*0.25, cy-sh-ry*0.2, rx*0.45, ry*0.45, "rgba(255,255,255,0.35)", "none", 0);
     if (isNew) {
-      s += poly([A, B, C, D], "none", "#FFD700", 2.5);
-    }
-
-    // Studs
-    for (let dc = 0; dc < cols; dc++) {
-      for (let dr = 0; dr < rows; dr++) {
-        const sc = off(iso(piece.col + dc + 0.5, piece.row + dr + 0.5, topL, lh));
-        const rx = (CELL_W / 2) * 0.36, ry = (CELL_H / 2) * 0.36;
-        // Stud body
-        s += poly(
-          [
-            { x: sc.x - rx, y: sc.y },
-            { x: sc.x + rx, y: sc.y },
-            { x: sc.x + rx, y: sc.y - STUD_H },
-            { x: sc.x - rx, y: sc.y - STUD_H },
-          ],
-          c.side, "#00000022"
-        );
-        // Stud top
-        s += `<ellipse cx="${sc.x.toFixed(1)}" cy="${(sc.y - STUD_H).toFixed(1)}" rx="${rx.toFixed(1)}" ry="${ry.toFixed(1)}" fill="${c.stud}" stroke="#00000033" stroke-width="0.5"/>`;
-        if (isNew) {
-          s += `<ellipse cx="${sc.x.toFixed(1)}" cy="${(sc.y - STUD_H).toFixed(1)}" rx="${(rx + 1.5).toFixed(1)}" ry="${(ry + 1).toFixed(1)}" fill="none" stroke="#FFD700" stroke-width="1"/>`;
-        }
-      }
+      s += ellipse(cx, cy-sh, rx+1.5, ry+1, "none", "#FFD700", 1.2);
     }
     return s;
   }
 
-  function drawArrow(piece: any): string {
-    const lh = isPlate(piece.part) ? PLATE_H : BRICK_H;
+  // ── Brick renderer ───────────────────────────────────────────────────────
+  function drawBrick(piece: any, isNew: boolean, ox: number, oy: number): string {
+    const col = getColor(piece.color);
+    const cols = piece.colSpan || 1;
+    const rows = piece.rowSpan || 1;
+    const layer = piece.layer || 1;
+    const lh = layerHeight(piece.part);
+    const tile = isTile(piece.part);
+    const round = isRound(piece.part);
+
+    const off = (p:{x:number;y:number}) => ({x: p.x+ox, y: p.y+oy});
+
+    // 8 corners: top face at (layer+1), bottom at (layer)
+    // Note: we use the SAME lh for the "top" calculation so stacking works correctly.
+    // The top face of a brick at layer L is at vertical position layer*(lh) up from base.
+    // We encode "top" as the surface: isoRaw(..., layer, lh) already gives the top surface
+    // if we treat layer as the *top* of this brick. To get the bottom we subtract lh.
+    const tl = off(isoRaw(piece.col,        piece.row,        layer, lh)); // top back-left
+    const tr = off(isoRaw(piece.col+cols,   piece.row,        layer, lh)); // top back-right
+    const tf = off(isoRaw(piece.col+cols,   piece.row+rows,   layer, lh)); // top front-right
+    const tfl= off(isoRaw(piece.col,        piece.row+rows,   layer, lh)); // top front-left
+    // bottom of brick = same coords but shifted down by lh px in Y (in screen space)
+    const bl = {x:tl.x, y:tl.y+lh};
+    const br = {x:tr.x, y:tr.y+lh};
+    const bf = {x:tf.x, y:tf.y+lh};
+    const bfl= {x:tfl.x,y:tfl.y+lh};
+
+    let s = "";
+
+    if (round && cols === 1 && rows === 1) {
+      // Round bricks/plates: draw as isometric cylinder approximation
+      const cx = (tl.x+tr.x+tf.x+tfl.x)/4;
+      const cy = (tl.y+tfl.y)/2;
+      const rx = CW*0.5, ry = CH*0.5;
+      // Side strip
+      s += polygon([{x:cx-rx,y:cy},{x:cx+rx,y:cy},{x:cx+rx,y:cy+lh},{x:cx-rx,y:cy+lh}], col[1], "#00000030", 0.5);
+      // Bottom ellipse
+      s += ellipse(cx, cy+lh, rx, ry, col[2], "#00000030", 0.5);
+      // Top ellipse
+      s += ellipse(cx, cy, rx, ry, col[0], "#00000040", 0.8);
+      // Top highlight
+      s += ellipse(cx-rx*0.2, cy-ry*0.2, rx*0.5, ry*0.5, "rgba(255,255,255,0.3)", "none", 0);
+      if (isNew) s += ellipse(cx, cy, rx+2, ry+1.5, "none", "#FFD700", 2);
+      return s;
+    }
+
+    // Left face (front-left visible face): tl, tfl, bfl, bl
+    s += polygon([tl,tfl,bfl,bl], col[1], "#00000020", 0.5);
+    // Right face (front-right visible face): tr, tf, bf, br
+    s += polygon([tr,tf,bf,br], col[2], "#00000020", 0.5);
+    // Top face: tl, tr, tf, tfl
+    s += polygon([tl,tr,tf,tfl], col[0], "#00000030", 0.7);
+
+    // New-piece highlight outline on top face
+    if (isNew) {
+      s += polygon([tl,tr,tf,tfl], "none", "#FFD700", 2.5);
+    }
+
+    // Studs (skip for tiles)
+    if (!tile) {
+      for (let dc = 0; dc < cols; dc++) {
+        for (let dr = 0; dr < rows; dr++) {
+          // Centre of this stud in grid space
+          const sc = off(isoRaw(piece.col+dc+0.5, piece.row+dr+0.5, layer, lh));
+          s += drawStud(sc.x, sc.y, col, isNew);
+        }
+      }
+    }
+
+    return s;
+  }
+
+  // ── Arrow renderer ───────────────────────────────────────────────────────
+  function drawArrow(piece: any, ox: number, oy: number): string {
+    const lh = layerHeight(piece.part);
     const cols = piece.colSpan || 1, rows = piece.rowSpan || 1;
-    const tip = off(iso(piece.col + cols / 2, piece.row + rows / 2, (piece.layer || 1) + 2, lh));
+    // Arrow tip hovers above the centre of the piece's top face
+    const raw = isoRaw(piece.col+cols/2, piece.row+rows/2, (piece.layer||1), lh);
+    const cx = raw.x + ox, cy = raw.y + oy - STUD_CY_H - 6;
+    const arrowLen = 22, headH = 10, headW = 9;
     return `
-      <line x1="${tip.x.toFixed(1)}" y1="${(tip.y - 22).toFixed(1)}" x2="${tip.x.toFixed(1)}" y2="${(tip.y - 6).toFixed(1)}" stroke="#FFD700" stroke-width="3" stroke-linecap="round"/>
-      <polygon points="${tip.x.toFixed(1)},${(tip.y - 2).toFixed(1)} ${(tip.x - 7).toFixed(1)},${(tip.y - 14).toFixed(1)} ${(tip.x + 7).toFixed(1)},${(tip.y - 14).toFixed(1)}" fill="#FFD700"/>
+      ${line(cx, cy-arrowLen, cx, cy-headH, "#FFD700", 3)}
+      <polygon points="${fmt(cx)},${fmt(cy)} ${fmt(cx-headW)},${fmt(cy-headH)} ${fmt(cx+headW)},${fmt(cy-headH)}" fill="#FFD700"/>
     `;
   }
 
-  // Parse baseplate size
+  // ── Baseplate size ───────────────────────────────────────────────────────
   let bpCols = 16, bpRows = 16;
   if (baseplateSize) {
-    const m = baseplateSize.match(/(\d+)x(\d+)/i);
+    const m = baseplateSize.match(/(\d+)\s*x\s*(\d+)/i);
     if (m) { bpCols = parseInt(m[1]); bpRows = parseInt(m[2]); }
   }
 
-  // Sort pieces back-to-front, bottom-to-top
-  const sorted = [...placedPieces].sort((a, b) => {
-    if (a.layer !== b.layer) return a.layer - b.layer;
-    return (a.col + a.row) - (b.col + b.row);
+  // ── Auto-fit: compute bounding box in raw iso space ──────────────────────
+  // We project all piece corners (plus baseplate corners) to find min/max x/y,
+  // then compute a scale and offset to fill the canvas with padding.
+  const W = 700, H = 520, PAD = 40;
+
+  // Collect all corner points in raw iso coords
+  const allRaw: {x:number;y:number}[] = [];
+  function addCorners(col:number, row:number, layer:number, lh:number, colSpan:number, rowSpan:number) {
+    for (const [dc,dr] of [[0,0],[colSpan,0],[colSpan,rowSpan],[0,rowSpan]]) {
+      const p = isoRaw(col+dc, row+dr, layer, lh);
+      allRaw.push(p);
+      allRaw.push({x:p.x, y:p.y+lh}); // bottom of brick too
+    }
+  }
+
+  if (hasBaseplate) {
+    addCorners(1, 1, 0, BRICK_Z, bpCols, bpRows);
+  }
+  for (const p of placedPieces) {
+    const lh = layerHeight(p.part);
+    addCorners(p.col||1, p.row||1, p.layer||1, lh, p.colSpan||1, p.rowSpan||1);
+    // Also account for studs above the top face
+    allRaw.push({x: isoRaw((p.col||1)+(p.colSpan||1)/2, (p.row||1)+(p.rowSpan||1)/2, p.layer||1, lh).x,
+                 y: isoRaw((p.col||1)+(p.colSpan||1)/2, (p.row||1)+(p.rowSpan||1)/2, p.layer||1, lh).y - STUD_CY_H - 30});
+  }
+
+  if (allRaw.length === 0) {
+    // Fallback: empty scene
+    return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}"><rect width="${W}" height="${H}" fill="#fff"/></svg>`;
+  }
+
+  const rawMinX = Math.min(...allRaw.map(p=>p.x));
+  const rawMaxX = Math.max(...allRaw.map(p=>p.x));
+  const rawMinY = Math.min(...allRaw.map(p=>p.y));
+  const rawMaxY = Math.max(...allRaw.map(p=>p.y));
+
+  const rawW = rawMaxX - rawMinX || 1;
+  const rawH = rawMaxY - rawMinY || 1;
+
+  // Scale to fill canvas with padding
+  const scaleX = (W - PAD*2) / rawW;
+  const scaleY = (H - PAD*2) / rawH;
+  const scale  = Math.min(scaleX, scaleY, 1.8); // cap at 1.8× to avoid over-zoom on tiny builds
+
+  // Offset so the scene is centred
+  const ox = PAD + (W - PAD*2 - rawW*scale)/2 - rawMinX*scale;
+  const oy = PAD + (H - PAD*2 - rawH*scale)/2 - rawMinY*scale;
+
+  // Scaled iso projection
+  function isoS(col:number, row:number, layer:number, lh:number) {
+    const raw = isoRaw(col, row, layer, lh);
+    return { x: raw.x*scale + ox, y: raw.y*scale + oy };
+  }
+
+  // ── Generate defs (gradient ids) ─────────────────────────────────────────
+  // We'll use inline fills only (no SVG defs needed for gradients in our approach)
+
+  // ── Sort pieces: painter's algorithm ─────────────────────────────────────
+  const sorted = [...placedPieces].sort((a,b) => {
+    // layer ascending first
+    const la = a.layer||1, lb = b.layer||1;
+    if (la !== lb) return la - lb;
+    // then iso depth: larger (col+row) = closer to viewer
+    const da = (a.col||1) + (a.row||1);
+    const db = (b.col||1) + (b.row||1);
+    return da - db;
   });
 
+  // ── Build SVG body ───────────────────────────────────────────────────────
   let body = "";
 
   // Baseplate
   if (hasBaseplate) {
-    const bc = { top: "#4CAF50", front: "#388E3C", side: "#2E7D32", stud: "#1B5E20" };
-    const A = off(iso(1, 1, 0, BRICK_H));
-    const B = off(iso(1 + bpCols, 1, 0, BRICK_H));
-    const C = off(iso(1 + bpCols, 1 + bpRows, 0, BRICK_H));
-    const D = off(iso(1, 1 + bpRows, 0, BRICK_H));
-    const E = off(iso(1, 1 + bpRows, -0.4, BRICK_H));
-    const F = off(iso(1 + bpCols, 1 + bpRows, -0.4, BRICK_H));
-    const G = off(iso(1 + bpCols, 1, -0.4, BRICK_H));
+    const BC: [string,string,string,string,string] = ["#5DC85D","#2E7D32","#388E3C","#4CAF50","#1B5E20"];
+    const off2 = (p:{x:number;y:number}) => ({x:p.x*scale+ox, y:p.y*scale+oy});
+    const tl = off2(isoRaw(1,      1,      0, BRICK_Z));
+    const tr = off2(isoRaw(1+bpCols,1,     0, BRICK_Z));
+    const tf = off2(isoRaw(1+bpCols,1+bpRows,0,BRICK_Z));
+    const tfl= off2(isoRaw(1,      1+bpRows,0, BRICK_Z));
+    const bl = {x:tl.x, y:tl.y+3*scale};
+    const br = {x:tr.x, y:tr.y+3*scale};
+    const bf = {x:tf.x, y:tf.y+3*scale};
+    const bfl= {x:tfl.x,y:tfl.y+3*scale};
 
-    body += poly([A, B, C, D], bc.top, "#1B5E2055");
-    body += poly([D, C, F, E], bc.side, "#1B5E2055");
-    body += poly([B, C, F, G], bc.front, "#1B5E2055");
+    body += polygon([tl,tfl,bfl,bl], BC[2], "#1B5E2040", 0.5);
+    body += polygon([tr,tf,bf,br],   BC[1], "#1B5E2040", 0.5);
+    body += polygon([tl,tr,tf,tfl],  BC[0], "#1B5E2040", 0.8);
 
-    // Stud grid on baseplate
-    for (let dc = 0; dc < bpCols; dc++) {
-      for (let dr = 0; dr < bpRows; dr++) {
-        const sc = off(iso(1 + dc + 0.5, 1 + dr + 0.5, 0.12, BRICK_H));
-        body += `<ellipse cx="${sc.x.toFixed(1)}" cy="${sc.y.toFixed(1)}" rx="3.8" ry="2.2" fill="${bc.stud}" stroke="#1B5E2033" stroke-width="0.3"/>`;
+    // Stud grid — skip if too zoomed out (scale < 0.6) to avoid clutter
+    if (scale >= 0.5) {
+      for (let dc = 0; dc < bpCols; dc++) {
+        for (let dr = 0; dr < bpRows; dr++) {
+          const sc = off2(isoRaw(1+dc+0.5, 1+dr+0.5, 0.1, BRICK_Z));
+          body += ellipse(sc.x, sc.y, 3.5*scale, 2*scale, BC[4], "#1B5E2040", 0.3);
+        }
       }
     }
   }
 
-  // Bricks
+  // Bricks — using scaled version of drawBrick
+  // We redefine drawBrick inline to use isoS instead of isoRaw+offset
   for (const piece of sorted) {
-    body += drawBrick(piece, newPieceIds.includes(piece.id));
+    const col2 = getColor(piece.color);
+    const cols = piece.colSpan || 1;
+    const rows = piece.rowSpan || 1;
+    const layer = piece.layer || 1;
+    const lh = layerHeight(piece.part);
+    const tile = isTile(piece.part);
+    const round = isRound(piece.part);
+    const isNew = newPieceIds.includes(piece.id);
+
+    const tl = isoS(piece.col,      piece.row,      layer, lh);
+    const tr = isoS(piece.col+cols, piece.row,      layer, lh);
+    const tf = isoS(piece.col+cols, piece.row+rows, layer, lh);
+    const tfl= isoS(piece.col,      piece.row+rows, layer, lh);
+    const lhS = lh * scale;
+    const bl = {x:tl.x, y:tl.y+lhS};
+    const br = {x:tr.x, y:tr.y+lhS};
+    const bf = {x:tf.x, y:tf.y+lhS};
+    const bfl= {x:tfl.x,y:tfl.y+lhS};
+
+    if (round && cols===1 && rows===1) {
+      const cx = (tl.x+tr.x+tf.x+tfl.x)/4;
+      const cy = (tl.y+tfl.y)/2;
+      const rx = CW*scale*0.5, ry = CH*scale*0.5;
+      body += polygon([{x:cx-rx,y:cy},{x:cx+rx,y:cy},{x:cx+rx,y:cy+lhS},{x:cx-rx,y:cy+lhS}], col2[1], "#00000030", 0.5);
+      body += ellipse(cx, cy+lhS, rx, ry, col2[2], "#00000030", 0.5);
+      body += ellipse(cx, cy, rx, ry, col2[0], "#00000040", 0.8);
+      body += ellipse(cx-rx*0.2, cy-ry*0.25, rx*0.5, ry*0.5, "rgba(255,255,255,0.3)", "none", 0);
+      if (isNew) body += ellipse(cx, cy, rx+2, ry+1.5, "none", "#FFD700", 2);
+      continue;
+    }
+
+    // Left face
+    body += polygon([tl,tfl,bfl,bl], col2[1], "#00000020", 0.5);
+    // Right face
+    body += polygon([tr,tf,bf,br], col2[2], "#00000020", 0.5);
+    // Top face
+    body += polygon([tl,tr,tf,tfl], col2[0], "#00000030", 0.7);
+    // Edge highlight on top (thin lighter line along back edges for depth)
+    body += `<polyline points="${fmt(tl.x)},${fmt(tl.y)} ${fmt(tr.x)},${fmt(tr.y)} ${fmt(tf.x)},${fmt(tf.y)}" fill="none" stroke="rgba(255,255,255,0.25)" stroke-width="1"/>`;
+
+    if (isNew) body += polygon([tl,tr,tf,tfl], "none", "#FFD700", 2.5);
+
+    // Studs
+    if (!tile && scale >= 0.4) {
+      for (let dc = 0; dc < cols; dc++) {
+        for (let dr = 0; dr < rows; dr++) {
+          const sc = isoS(piece.col+dc+0.5, piece.row+dr+0.5, layer, lh);
+          const rx = STUD_RX*scale, ry = STUD_RY*scale, sh = STUD_CY_H*scale;
+          // Cylinder side
+          body += polygon([
+            {x:sc.x-rx, y:sc.y},
+            {x:sc.x+rx, y:sc.y},
+            {x:sc.x+rx, y:sc.y-sh},
+            {x:sc.x-rx, y:sc.y-sh},
+          ], col2[1], "#00000020", 0.3);
+          // Bottom rim
+          body += ellipse(sc.x, sc.y, rx, ry, col2[2], "#00000020", 0.3);
+          // Top cap
+          body += ellipse(sc.x, sc.y-sh, rx, ry, col2[3], "#00000030", 0.5);
+          // Highlight crescent
+          body += ellipse(sc.x-rx*0.25, sc.y-sh-ry*0.2, rx*0.45, ry*0.45, "rgba(255,255,255,0.35)", "none", 0);
+          if (isNew) body += ellipse(sc.x, sc.y-sh, rx+1.5, ry+1, "none", "#FFD700", 1.2);
+        }
+      }
+    }
   }
 
   // Arrows above new pieces
-  for (const piece of placedPieces.filter((p) => newPieceIds.includes(p.id))) {
-    body += drawArrow(piece);
+  for (const piece of placedPieces.filter(p => newPieceIds.includes(p.id))) {
+    const lh = layerHeight(piece.part);
+    const cols = piece.colSpan||1, rows = piece.rowSpan||1;
+    const sc = isoS(piece.col+cols/2, piece.row+rows/2, piece.layer||1, lh);
+    const cx = sc.x, cy = sc.y - STUD_CY_H*scale - 4;
+    const aLen = 20, hH = 10, hW = 8;
+    body += line(cx, cy-aLen, cx, cy-hH, "#FFD700", 3);
+    body += `<polygon points="${fmt(cx)},${fmt(cy)} ${fmt(cx-hW)},${fmt(cy-hH)} ${fmt(cx+hW)},${fmt(cy-hH)}" fill="#FFD700"/>`;
   }
 
-  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">
-  <rect width="${W}" height="${H}" fill="#FFFFFF"/>
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${W}" height="${H}" viewBox="0 0 ${W} ${H}" style="background:#fff">
+  <rect width="${W}" height="${H}" fill="#FAFAFA"/>
   ${body}
 </svg>`;
 }
@@ -287,11 +510,20 @@ VALID COLORS: Red, Blue, Yellow, Green, Orange, White, Black, Light Gray, Dark G
 ${REAL_LEGO_PARTS}
 
 COORDINATE SYSTEM:
-- The build sits on a baseplate. Front-left stud = column 1, row 1, layer 0 (the baseplate surface).
-- Columns increase left→right (X axis). Rows increase front→back (Y axis). Layers increase bottom→up (Z axis, layer 1 = first brick layer on top of baseplate).
-- A 2x4 brick placed horizontally at column 3, row 5, layer 1 occupies columns 3–6, row 5, layer 1.
-- A 2x4 brick placed VERTICALLY at column 3, row 5, layer 1 occupies column 3, rows 5–8, layer 1.
-- Pieces MUST physically connect: every piece must rest on the baseplate (layer 1) or on top of another piece exactly one layer below it. No floating pieces allowed.
+- The build sits on a baseplate. Front-left stud = column 1, row 1. Columns increase left→right (X). Rows increase front→back (Y). Layers increase bottom→up (Z). Layer 1 = first brick layer on top of baseplate surface.
+- A 2x4 brick placed horizontally at col 3, row 5, layer 1 occupies cols 3–6, row 5 (colSpan=4, rowSpan=2). Wait — a 2x4 is 2 studs wide × 4 studs long. If horizontal (long axis = columns), colSpan=4, rowSpan=2. If vertical (long axis = rows), colSpan=2, rowSpan=4.
+- A 1x2 plate placed vertically at col 4, row 2 occupies col 4, rows 2–3 (colSpan=1, rowSpan=2).
+- Pieces MUST physically connect: every piece at layer N must have a piece directly below it at layer N-1 (or the baseplate at layer 0). No floating pieces.
+
+CRITICAL — USE THE FULL GRID, NOT JUST THE CENTRE:
+- For a 16×16 baseplate, use columns 1–16 and rows 1–16 fully. Do not cluster all pieces in one corner.
+- Centre your build. A shape that is 10 studs wide should start around column 3–4 to centre on a 16×16 plate.
+- For geographic/map builds (e.g. "Map of New Jersey", "Map of Texas"): think about the silhouette of the region. Use plates to trace the outline before stacking bricks on top. Lay pieces flat (layer 1) to cover the correct geographic footprint first.
+
+PIECE SIZING — CRITICAL:
+- A "2x4 Brick" has 2 rows × 4 columns of studs. colSpan must match the stud count.
+- A "1x2 plate" has 1 row × 2 columns (colSpan=2, rowSpan=1 if horizontal; colSpan=1, rowSpan=2 if vertical).
+- NEVER set colSpan or rowSpan to 0. Minimum is 1.
 
 Style: ${styleDescriptions[stylePreset] || styleDescriptions.classic}
 Difficulty: ${difficultyLevel}

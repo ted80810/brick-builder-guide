@@ -6,23 +6,53 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+function detectBaseplate(allPages: any[]): { present: boolean; description: string } {
+  const baseplateKeywords = ["baseplate", "base plate", "building plate", "green plate", "flat plate"];
+  for (const page of allPages) {
+    const text = `${page.title} ${page.instructions} ${JSON.stringify(page.partsNeeded)}`.toLowerCase();
+    if (baseplateKeywords.some((kw) => text.includes(kw))) {
+      const desc = page.partsNeeded
+        ? (Array.isArray(page.partsNeeded)
+            ? page.partsNeeded
+                .filter((p: any) => {
+                  const s = (typeof p === "string" ? p : `${p.color} ${p.part}`).toLowerCase();
+                  return baseplateKeywords.some((kw) => s.includes(kw));
+                })
+                .map((p: any) => (typeof p === "string" ? p : `${p.color} ${p.part}`))
+                .join(", ")
+            : "")
+        : "";
+      return { present: true, description: desc || "baseplate" };
+    }
+  }
+  return { present: false, description: "" };
+}
+
 function buildCumulativeDescription(allPages: any[], currentPageNumber: number): string {
   const priorSteps = allPages
     .filter((p: any) => p.pageNumber < currentPageNumber)
     .sort((a: any, b: any) => a.pageNumber - b.pageNumber);
 
+  const baseplate = detectBaseplate(allPages);
+
   if (priorSteps.length === 0) {
-    return "This is the FIRST step. Start from an empty baseplate/surface.";
+    return baseplate.present
+      ? `FIRST STEP — the only thing present is the ${baseplate.description}. Nothing else has been placed yet.`
+      : "FIRST STEP — nothing has been placed yet. There is no baseplate for this build.";
   }
 
   const descriptions = priorSteps.map((p: any) => {
     const parts = Array.isArray(p.partsNeeded)
       ? p.partsNeeded.map((pt: any) => typeof pt === "string" ? pt : `${pt.quantity}x ${pt.color} ${pt.part}`).join(", ")
       : "";
-    return `Step ${p.pageNumber} ("${p.title}"): ${p.instructions} [Parts: ${parts}]`;
+    return `Step ${p.pageNumber} ("${p.title}"): ${p.instructions} [Parts placed: ${parts}]`;
   });
 
-  return `The build so far (${priorSteps.length} steps completed):\n${descriptions.join("\n")}`;
+  const baseplateNote = baseplate.present
+    ? `BASEPLATE: A ${baseplate.description} was introduced in this build and must remain visible in every step image as the permanent foundation.\n\n`
+    : "";
+
+  return `${baseplateNote}Steps completed so far (${priorSteps.length} of ${priorSteps.length + 1} total up to this point):\n${descriptions.join("\n")}`;
 }
 
 async function generateStepImage(
@@ -35,21 +65,26 @@ async function generateStepImage(
   cumulativeContext: string
 ): Promise<string | null> {
   try {
-    const prompt = `Create a LEGO building instruction diagram for Step ${stepNumber}: "${title}" of a "${manualTitle}" LEGO set.
+    const prompt = `You are producing one page of an official LEGO instruction manual for "${manualTitle}". This is Step ${stepNumber}: "${title}".
 
-CUMULATIVE BUILD STATE — show the ENTIRE structure as it looks after completing this step:
+=== SPATIAL COORDINATE SYSTEM (use this consistently across ALL steps) ===
+The build uses a stud grid. Front-left corner = (1,1). Columns run left→right (X axis). Rows run front→back (Y axis). Height runs bottom→up (Z axis). ALWAYS use the same fixed isometric camera angle: slightly above, looking at the front-left corner. Do NOT rotate or shift the viewpoint between steps.
+
+=== WHAT HAS BEEN BUILT SO FAR ===
 ${cumulativeContext}
 
-CURRENT STEP (Step ${stepNumber}): ${instructions}
-New parts being added in this step: ${partsNeeded.join(", ")}
+=== WHAT TO ADD IN THIS STEP ===
+${instructions}
+New pieces: ${partsNeeded.join(", ")}
 
-CRITICAL INSTRUCTIONS:
-- Show the COMPLETE structure built so far from all previous steps as a solid, assembled model
-- HIGHLIGHT the new pieces being added in this step with a subtle glow, outline, or brighter color so they stand out
-- Use arrows or callouts pointing to where the new pieces connect
-- Isometric view, white background, colorful LEGO bricks
-- Style: Clean technical illustration similar to official LEGO instruction manuals
-- The model should look progressively more complete with each step`;
+=== ILLUSTRATION RULES ===
+- Draw the COMPLETE model as it exists AFTER this step — every piece from every prior step PLUS the new ones
+- If a baseplate is mentioned in the build history above, it must remain visible in every image as the permanent foundation — never omit it
+- NEW pieces added in this step: draw with a bright yellow outline or highlight so they stand out clearly
+- Previously placed pieces: draw in their correct colors, slightly muted compared to the new pieces
+- Draw placement arrows pointing to exactly where the new pieces connect on the stud grid
+- Isometric 3D view, white background, clean technical style like official LEGO manuals
+- NO text, NO step numbers, NO labels inside the image`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -218,22 +253,27 @@ Your output must be a valid JSON object with this structure:
   ]
 }
 
+SPATIAL COORDINATE SYSTEM — use this in every instruction:
+- The build sits on a green baseplate. Treat it as a stud grid where the front-left corner is (1,1). X = columns left→right, Y = rows front→back, Z = height in layers.
+- Every piece placement MUST include stud-grid coordinates, e.g. "Place a red 2x4 brick at row 3, columns 2–5, layer 1 (flat on the baseplate)".
+- The baseplate is the permanent foundation. It is present in EVERY step and never removed.
+
 Rules:
 - Each page represents one building step — ONE step = placing 1-3 pieces MAXIMUM
 - NEVER skip steps. If a step says "place 4 bricks", break it into multiple steps (one per brick or pair)
-- Each step's instructions must describe EXACTLY where to place each piece relative to previously placed pieces (e.g., "Place a red 2x4 brick on top of the blue brick from Step 2, aligned to the left edge")
-- Use precise positional language: "on top of", "to the left of", "flush with the right edge", "centered on studs 3-6", "perpendicular to"
+- Every instruction MUST specify: piece color, piece size, stud-grid position (row, column, layer), and orientation (horizontal/vertical/direction it faces)
+- Always reference the piece's connection to an existing piece or the baseplate, e.g. "on top of the brick placed in Step 2" or "directly on the baseplate at row 1, columns 1–4"
+- Use precise positional language: "on top of", "flush with", "centered on studs X–Y", "perpendicular to", "parallel to"
 - Reference previous steps by number so the builder can orient themselves
 - Group steps into logical sections (base, walls, roof, details, etc.) like official LEGO manuals
-- Be specific about brick colors, sizes (e.g., "2x4 red brick", "1x2 blue plate")
+- Be specific about brick colors and sizes (e.g., "2x4 red brick", "1x2 blue plate")
 - Include helpful tips for tricky steps or alignment
-- Start with the foundation/base and build upward
-- Group related sub-assemblies together
+- Start with the baseplate, then foundation bricks, then build upward
 - Make instructions clear enough for a ${difficultyLevel.toLowerCase()} builder
 - ${difficultyLevel === "Beginner" ? "Keep steps very simple with 1-2 pieces per step. Be extra verbose about placement." : difficultyLevel === "Advanced" ? "Can include 2-3 pieces per step with complex techniques" : "Use 1-3 pieces per step, balance detail with clarity"}
 - Include a complete parts list at the end with totals
 - partsNeeded should use the structured format with part, color, and quantity
-- CRITICAL: Think through the entire build physically. Each step must logically follow the previous one. No piece should "float" — every piece must connect to an existing structure or the baseplate.`;
+- CRITICAL: Think through the entire build physically. Each step must logically follow the previous one. No piece should "float" — every piece must connect to an existing piece or the baseplate. If a piece would float, it is wrong.`;
 
     const aiDecides = manual.page_count === 0;
     const userPrompt = aiDecides

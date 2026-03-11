@@ -6,18 +6,50 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-supabase-client-platform, x-supabase-client-platform-version, x-supabase-client-runtime, x-supabase-client-runtime-version",
 };
 
+function buildCumulativeDescription(allPages: any[], currentPageNumber: number): string {
+  const priorSteps = allPages
+    .filter((p: any) => p.pageNumber < currentPageNumber)
+    .sort((a: any, b: any) => a.pageNumber - b.pageNumber);
+
+  if (priorSteps.length === 0) {
+    return "This is the FIRST step. Start from an empty baseplate/surface.";
+  }
+
+  const descriptions = priorSteps.map((p: any) => {
+    const parts = Array.isArray(p.partsNeeded)
+      ? p.partsNeeded.map((pt: any) => typeof pt === "string" ? pt : `${pt.quantity}x ${pt.color} ${pt.part}`).join(", ")
+      : "";
+    return `Step ${p.pageNumber} ("${p.title}"): ${p.instructions} [Parts: ${parts}]`;
+  });
+
+  return `The build so far (${priorSteps.length} steps completed):\n${descriptions.join("\n")}`;
+}
+
 async function generateStepImage(
   title: string,
   instructions: string,
   partsNeeded: string[],
   manualTitle: string,
-  apiKey: string
+  apiKey: string,
+  stepNumber: number,
+  cumulativeContext: string
 ): Promise<string | null> {
   try {
-    const prompt = `Create a clean, simple LEGO building instruction diagram for step: "${title}" of a "${manualTitle}" LEGO set. 
-Show the LEGO bricks being assembled: ${instructions}
-Parts used: ${partsNeeded.join(", ")}
-Style: Clean technical illustration, isometric view, white background, colorful LEGO bricks, minimal text, similar to official LEGO instruction manuals. Show arrows indicating where pieces connect.`;
+    const prompt = `Create a LEGO building instruction diagram for Step ${stepNumber}: "${title}" of a "${manualTitle}" LEGO set.
+
+CUMULATIVE BUILD STATE — show the ENTIRE structure as it looks after completing this step:
+${cumulativeContext}
+
+CURRENT STEP (Step ${stepNumber}): ${instructions}
+New parts being added in this step: ${partsNeeded.join(", ")}
+
+CRITICAL INSTRUCTIONS:
+- Show the COMPLETE structure built so far from all previous steps as a solid, assembled model
+- HIGHLIGHT the new pieces being added in this step with a subtle glow, outline, or brighter color so they stand out
+- Use arrows or callouts pointing to where the new pieces connect
+- Isometric view, white background, colorful LEGO bricks
+- Style: Clean technical illustration similar to official LEGO instruction manuals
+- The model should look progressively more complete with each step`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -107,7 +139,6 @@ serve(async (req) => {
     if (manualError || !manual) throw new Error("Manual not found");
 
     await supabase.from("manuals").update({ status: "generating" }).eq("id", manualId);
-
 
     const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
     if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
@@ -344,18 +375,23 @@ Generate exactly ${manual.page_count} pages of step-by-step instructions, organi
 
     console.log(`Generating images for ${allPages.length} steps...`);
 
+    // Generate images sequentially so each step has cumulative context
     for (const page of allPages) {
       try {
         const partsStr = Array.isArray(page.partsNeeded)
           ? page.partsNeeded.map((p: any) => typeof p === "string" ? p : `${p.quantity}x ${p.color} ${p.part}`).join(", ")
           : "";
 
+        const cumulativeContext = buildCumulativeDescription(allPages, page.pageNumber);
+
         const base64Image = await generateStepImage(
           page.title,
           page.instructions,
           [partsStr],
           manual.title,
-          LOVABLE_API_KEY
+          LOVABLE_API_KEY,
+          page.pageNumber,
+          cumulativeContext
         );
 
         if (base64Image) {

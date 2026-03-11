@@ -188,16 +188,21 @@ Your output must be a valid JSON object with this structure:
 }
 
 Rules:
-- Each page represents one building step
+- Each page represents one building step — ONE step = placing 1-3 pieces MAXIMUM
+- NEVER skip steps. If a step says "place 4 bricks", break it into multiple steps (one per brick or pair)
+- Each step's instructions must describe EXACTLY where to place each piece relative to previously placed pieces (e.g., "Place a red 2x4 brick on top of the blue brick from Step 2, aligned to the left edge")
+- Use precise positional language: "on top of", "to the left of", "flush with the right edge", "centered on studs 3-6", "perpendicular to"
+- Reference previous steps by number so the builder can orient themselves
 - Group steps into logical sections (base, walls, roof, details, etc.) like official LEGO manuals
 - Be specific about brick colors, sizes (e.g., "2x4 red brick", "1x2 blue plate")
-- Include helpful tips for tricky steps
+- Include helpful tips for tricky steps or alignment
 - Start with the foundation/base and build upward
 - Group related sub-assemblies together
 - Make instructions clear enough for a ${difficultyLevel.toLowerCase()} builder
-- ${difficultyLevel === "Beginner" ? "Keep steps very simple with 1-3 pieces per step" : difficultyLevel === "Advanced" ? "Can include complex sub-assemblies and techniques" : "Balance detail with clarity"}
+- ${difficultyLevel === "Beginner" ? "Keep steps very simple with 1-2 pieces per step. Be extra verbose about placement." : difficultyLevel === "Advanced" ? "Can include 2-3 pieces per step with complex techniques" : "Use 1-3 pieces per step, balance detail with clarity"}
 - Include a complete parts list at the end with totals
-- partsNeeded should use the structured format with part, color, and quantity`;
+- partsNeeded should use the structured format with part, color, and quantity
+- CRITICAL: Think through the entire build physically. Each step must logically follow the previous one. No piece should "float" — every piece must connect to an existing structure or the baseplate.`;
 
     const aiDecides = manual.page_count === 0;
     const userPrompt = aiDecides

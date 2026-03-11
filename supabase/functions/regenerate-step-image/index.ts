@@ -95,9 +95,23 @@ Style: Clean technical illustration, isometric view, white background, colorful 
     const { data: urlData } = supabase.storage.from("manual-images").getPublicUrl(filePath);
     const publicUrl = urlData?.publicUrl;
 
-    // Update manual content with new image URL (add cache buster)
+    // Update the page in the original content structure and save
     const imageUrl = `${publicUrl}?t=${Date.now()}`;
-    page.imageUrl = imageUrl;
+    if (content.sections) {
+      for (const section of content.sections) {
+        for (let i = 0; i < section.pages.length; i++) {
+          if (section.pages[i].pageNumber === pageNumber) {
+            section.pages[i].imageUrl = imageUrl;
+          }
+        }
+      }
+    } else if (content.pages) {
+      for (let i = 0; i < content.pages.length; i++) {
+        if (content.pages[i].pageNumber === pageNumber) {
+          content.pages[i].imageUrl = imageUrl;
+        }
+      }
+    }
     await supabase.from("manuals").update({ content }).eq("id", manualId);
 
     return new Response(JSON.stringify({ success: true, imageUrl }), {

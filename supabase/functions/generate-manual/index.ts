@@ -58,33 +58,62 @@ function buildCumulativeDescription(allPages: any[], currentPageNumber: number):
 async function generateStepImage(
   title: string,
   instructions: string,
-  partsNeeded: string[],
+  newPartLabels: string[],
   manualTitle: string,
   apiKey: string,
   stepNumber: number,
-  cumulativeContext: string
+  cumulativeContext: string,
+  placedPieces: any[],
+  newPieces: any[],
+  hasBaseplate: boolean,
+  baseplateSize: string | null,
 ): Promise<string | null> {
   try {
-    const prompt = `You are producing one page of an official LEGO instruction manual for "${manualTitle}". This is Step ${stepNumber}: "${title}".
+    // Build an exact visual description of the current state
+    const placedDesc = placedPieces.length > 0
+      ? placedPieces.map((p: any) => {
+          const loc = p.orientation === "vertical"
+            ? `col ${p.col}, rows ${p.row}–${p.row + (p.rowSpan || 1) - 1}, layer ${p.layer}`
+            : `row ${p.row}, cols ${p.col}–${p.col + (p.colSpan || 1) - 1}, layer ${p.layer}`;
+          return `  • ${p.color} ${p.part} at ${loc}${p.note ? ` (${p.note})` : ""}`;
+        }).join("\n")
+      : "  (none yet)";
 
-=== SPATIAL COORDINATE SYSTEM (use this consistently across ALL steps) ===
-The build uses a stud grid. Front-left corner = (1,1). Columns run left→right (X axis). Rows run front→back (Y axis). Height runs bottom→up (Z axis). ALWAYS use the same fixed isometric camera angle: slightly above, looking at the front-left corner. Do NOT rotate or shift the viewpoint between steps.
+    const newDesc = newPieces.length > 0
+      ? newPieces.map((p: any) => {
+          const loc = p.orientation === "vertical"
+            ? `col ${p.col}, rows ${p.row}–${p.row + (p.rowSpan || 1) - 1}, layer ${p.layer}`
+            : `row ${p.row}, cols ${p.col}–${p.col + (p.colSpan || 1) - 1}, layer ${p.layer}`;
+          return `  • ${p.color} ${p.part} at ${loc}`;
+        }).join("\n")
+      : newPartLabels.map((l: string) => `  • ${l}`).join("\n");
 
-=== WHAT HAS BEEN BUILT SO FAR ===
-${cumulativeContext}
+    const baseplateNote = hasBaseplate
+      ? `A flat ${baseplateSize || "green"} LEGO baseplate covers the entire bottom. It must always be visible beneath all pieces.`
+      : "There is no baseplate — pieces sit directly on a flat surface.";
 
-=== WHAT TO ADD IN THIS STEP ===
-${instructions}
-New pieces: ${partsNeeded.join(", ")}
+    const prompt = `You are illustrating Step ${stepNumber} ("${title}") of an official LEGO instruction manual for "${manualTitle}".
+
+=== FOUNDATION ===
+${baseplateNote}
+
+=== COORDINATE SYSTEM (fixed — never change the camera angle between steps) ===
+Stud grid: front-left = col 1, row 1. Columns increase left→right. Rows increase front→back. Layers increase bottom→up. Camera angle: fixed isometric view, slightly above, looking at the front-left corner.
+
+=== ALL PIECES PRESENT AFTER THIS STEP (draw ALL of these) ===
+${placedDesc}
+
+=== NEW PIECES ADDED IN THIS STEP (highlight these in yellow) ===
+${newDesc}
 
 === ILLUSTRATION RULES ===
-- Draw the COMPLETE model as it exists AFTER this step — every piece from every prior step PLUS the new ones
-- If a baseplate is mentioned in the build history above, it must remain visible in every image as the permanent foundation — never omit it
-- NEW pieces added in this step: draw with a bright yellow outline or highlight so they stand out clearly
-- Previously placed pieces: draw in their correct colors, slightly muted compared to the new pieces
-- Draw placement arrows pointing to exactly where the new pieces connect on the stud grid
-- Isometric 3D view, white background, clean technical style like official LEGO manuals
-- NO text, NO step numbers, NO labels inside the image`;
+- Draw every piece listed above at its EXACT grid position — do not invent or move any piece
+- Each brick's stud count must match its size exactly (e.g. a 2x4 brick has 2 rows × 4 columns of studs)
+- Previously placed pieces: draw in their listed colors, slightly muted
+- New pieces: draw with a bright yellow outline/glow and placement arrows
+- ${hasBaseplate ? "The baseplate must be visible as the bottom layer in every image" : "No baseplate"}
+- White background, isometric 3D view, clean official LEGO manual style
+- NO text, NO step numbers, NO labels`;
 
     const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
@@ -222,216 +251,244 @@ Every piece in partsNeeded must exist in at least one of the selected sets.`;
       whimsical: "Playful and imaginative design with unexpected elements",
     };
 
-    const systemPrompt = `You are a LEGO instruction manual creator. Generate detailed step-by-step building instructions for a LEGO Creator set model.
+    // ─────────────────────────────────────────────────────────────────
+    // PHASE 1: Design the complete finished model
+    // The AI lays out every piece at exact grid coordinates BEFORE
+    // deciding how to split things into steps. This guarantees the
+    // final model is physically valid and all piece positions are known.
+    // ─────────────────────────────────────────────────────────────────
 
-Difficulty level: ${difficultyLevel}
+    const REAL_LEGO_PARTS = `VALID LEGO PIECE CATALOG (only use pieces from this list):
+Bricks: 1x1, 1x2, 1x3, 1x4, 1x6, 1x8, 2x2, 2x3, 2x4, 2x6, 2x8, 2x10
+Plates: 1x1 plate, 1x2 plate, 1x4 plate, 1x6 plate, 1x8 plate, 2x2 plate, 2x4 plate, 2x6 plate, 2x8 plate, 4x4 plate, 6x6 plate, 8x8 plate, 16x16 baseplate, 32x32 baseplate
+Slopes: 1x1 slope 30°, 1x2 slope 30°, 1x2 slope 45°, 2x2 slope 45°, 1x2 inverted slope, 2x2 inverted slope
+Tiles: 1x1 tile, 1x2 tile, 1x4 tile, 2x2 tile, 2x4 tile
+Special: 1x1 round brick, 1x1 round plate, 2x2 round brick, 1x2 jumper plate, 1x2x2 window frame, 1x4x3 window frame, 1x1x3 pillar, 2x2 corner brick
+
+VALID COLORS: Red, Blue, Yellow, Green, Orange, White, Black, Light Gray, Dark Gray, Brown, Dark Brown, Tan, Dark Tan, Sand Green, Sand Blue, Dark Blue, Dark Red, Lime Green, Dark Green, Medium Azure, Coral, Lavender, Dark Purple, Reddish Brown, Transparent Clear, Transparent Red, Transparent Blue, Transparent Yellow, Transparent Green`;
+
+    const phase1SystemPrompt = `You are a LEGO set designer. Your job is to design a complete, finished LEGO model by laying out every single piece at exact stud-grid coordinates.
+
+${REAL_LEGO_PARTS}
+
+COORDINATE SYSTEM:
+- The build sits on a baseplate. Front-left stud = column 1, row 1, layer 0 (the baseplate surface).
+- Columns increase left→right (X axis). Rows increase front→back (Y axis). Layers increase bottom→up (Z axis, layer 1 = first brick layer on top of baseplate).
+- A 2x4 brick placed horizontally at column 3, row 5, layer 1 occupies columns 3–6, row 5, layer 1.
+- A 2x4 brick placed VERTICALLY at column 3, row 5, layer 1 occupies column 3, rows 5–8, layer 1.
+- Pieces MUST physically connect: every piece must rest on the baseplate (layer 1) or on top of another piece exactly one layer below it. No floating pieces allowed.
+
 Style: ${styleDescriptions[stylePreset] || styleDescriptions.classic}
+Difficulty: ${difficultyLevel}
 ${pieceConstraint}
 ${setConstraintPrompt}
 
-Your output must be a valid JSON object with this structure:
+Return a JSON object describing the COMPLETE finished model. Every piece must be listed with exact position.`;
+
+    const phase1UserPrompt = `Design a complete LEGO model for: "${manual.title}"
+Description: ${manual.description}
+
+Return ONLY a JSON object with this structure:
+{
+  "modelDescription": "Brief description of the finished model",
+  "hasBaseplate": true or false,
+  "baseplateSize": "16x16" or "32x32" or null,
+  "estimatedPieceCount": <number>,
+  "pieces": [
+    {
+      "id": 1,
+      "part": "2x4 Brick",
+      "color": "Red",
+      "col": 3,
+      "row": 5,
+      "layer": 1,
+      "orientation": "horizontal",
+      "colSpan": 4,
+      "rowSpan": 2,
+      "note": "optional context like 'south wall base'"
+    }
+  ],
+  "partsList": [
+    {"part": "2x4 Brick", "color": "Red", "quantity": 4}
+  ]
+}
+
+Orientation must be "horizontal" (long axis runs left-right, colSpan > rowSpan) or "vertical" (long axis runs front-back, rowSpan > colSpan). For square pieces (1x1, 2x2 etc) use "horizontal".
+Think carefully about the physical structure. No piece may float.`;
+
+    const phase1Response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+      method: "POST",
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: "google/gemini-3-flash-preview",
+        messages: [
+          { role: "system", content: phase1SystemPrompt },
+          { role: "user", content: phase1UserPrompt },
+        ],
+      }),
+    });
+
+    if (!phase1Response.ok) {
+      const errText = await phase1Response.text();
+      console.error("Phase 1 AI error:", phase1Response.status, errText);
+      if (phase1Response.status === 429) {
+        await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
+        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
+          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      if (phase1Response.status === 402) {
+        await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
+        return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
+          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
+        });
+      }
+      throw new Error("Phase 1 AI generation failed");
+    }
+
+    const phase1Result = await phase1Response.json();
+    const phase1Text = phase1Result.choices?.[0]?.message?.content || "";
+    const phase1JsonMatch = phase1Text.match(/\{[\s\S]*\}/);
+    let modelDesign: any;
+    try {
+      modelDesign = phase1JsonMatch ? JSON.parse(phase1JsonMatch[0]) : null;
+    } catch {
+      throw new Error("Phase 1 returned invalid JSON");
+    }
+    if (!modelDesign?.pieces?.length) throw new Error("Phase 1 returned no pieces");
+
+    console.log(`Phase 1 complete: ${modelDesign.pieces.length} pieces designed`);
+
+    // ─────────────────────────────────────────────────────────────────
+    // PHASE 2: Decompose the finished model into ordered build steps
+    // The AI knows exactly what the final model looks like and works
+    // backwards to create a logical, layer-by-layer build sequence.
+    // ─────────────────────────────────────────────────────────────────
+
+    const aiDecides = manual.page_count === 0;
+    const stepCountInstruction = aiDecides
+      ? "Generate as many steps as needed — typically one step per 1-2 pieces."
+      : `Generate exactly ${manual.page_count} steps total.`;
+
+    const phase2SystemPrompt = `You are a LEGO instruction manual writer. You have been given a complete, finished model design with every piece at exact coordinates. Your job is to decompose it into a logical step-by-step build sequence.
+
+RULES FOR STEP ORDERING:
+- Always start with the baseplate (if present), then layer 1 pieces (bottom-most), then layer 2, etc.
+- Within each layer, work from back-left to front-right so earlier pieces support later ones.
+- Never introduce a piece that would require moving or lifting a piece placed in an earlier step.
+- Each step = 1 to 2 pieces maximum for Beginner, 1 to 3 for Intermediate/Advanced.
+- ${stepCountInstruction}
+- Group steps into named sections (e.g., "Base Layer", "Walls", "Roof", "Details").
+
+INSTRUCTION WRITING RULES:
+- Reference pieces by their ID from the model design (e.g., "piece #12").
+- Describe placement using the exact col/row/layer from the model design.
+- Use language like: "Place a Red 2x4 Brick horizontally at row 5, columns 3–6, layer 1, directly on the baseplate."
+- If placing on top of another piece: "Place on top of piece #5 (the Blue 2x4 Brick at row 3, columns 1–4)."
+- Never use vague terms like "to the left" without a coordinate. Always give the exact position.`;
+
+    const phase2UserPrompt = `Here is the complete finished model for "${manual.title}":
+
+${JSON.stringify(modelDesign, null, 2)}
+
+Decompose this into step-by-step build instructions. Return ONLY a JSON object with this structure:
 {
   "difficulty": "${difficultyLevel}",
   "style": "${stylePreset}",
-  "estimatedPieceCount": <number>,
+  "estimatedPieceCount": ${modelDesign.estimatedPieceCount || modelDesign.pieces.length},
+  "hasBaseplate": ${modelDesign.hasBaseplate},
+  "finishedModel": ${JSON.stringify(modelDesign.pieces)},
   "sections": [
     {
-      "sectionTitle": "Section name (e.g., Base, Walls, Roof)",
+      "sectionTitle": "Base Layer",
       "pages": [
         {
           "pageNumber": 1,
           "title": "Step title",
-          "instructions": "Detailed building instructions for this step",
-          "partsNeeded": [{"part": "2x4 Brick", "color": "Red", "quantity": 3}],
-          "tip": "Optional building tip"
+          "instructions": "Exact placement instructions referencing col/row/layer",
+          "pieceIds": [1, 2],
+          "partsNeeded": [{"part": "2x4 Brick", "color": "Red", "quantity": 1}],
+          "tip": "Optional tip"
         }
       ]
     }
   ],
-  "partsList": [
-    {"part": "2x4 Brick", "color": "Red", "quantity": 8}
-  ]
-}
+  "partsList": ${JSON.stringify(modelDesign.partsList)}
+}`;
 
-SPATIAL COORDINATE SYSTEM — use this in every instruction:
-- The build sits on a green baseplate. Treat it as a stud grid where the front-left corner is (1,1). X = columns left→right, Y = rows front→back, Z = height in layers.
-- Every piece placement MUST include stud-grid coordinates, e.g. "Place a red 2x4 brick at row 3, columns 2–5, layer 1 (flat on the baseplate)".
-- The baseplate is the permanent foundation. It is present in EVERY step and never removed.
-
-Rules:
-- Each page represents one building step — ONE step = placing 1-3 pieces MAXIMUM
-- NEVER skip steps. If a step says "place 4 bricks", break it into multiple steps (one per brick or pair)
-- Every instruction MUST specify: piece color, piece size, stud-grid position (row, column, layer), and orientation (horizontal/vertical/direction it faces)
-- Always reference the piece's connection to an existing piece or the baseplate, e.g. "on top of the brick placed in Step 2" or "directly on the baseplate at row 1, columns 1–4"
-- Use precise positional language: "on top of", "flush with", "centered on studs X–Y", "perpendicular to", "parallel to"
-- Reference previous steps by number so the builder can orient themselves
-- Group steps into logical sections (base, walls, roof, details, etc.) like official LEGO manuals
-- Be specific about brick colors and sizes (e.g., "2x4 red brick", "1x2 blue plate")
-- Include helpful tips for tricky steps or alignment
-- Start with the baseplate, then foundation bricks, then build upward
-- Make instructions clear enough for a ${difficultyLevel.toLowerCase()} builder
-- ${difficultyLevel === "Beginner" ? "Keep steps very simple with 1-2 pieces per step. Be extra verbose about placement." : difficultyLevel === "Advanced" ? "Can include 2-3 pieces per step with complex techniques" : "Use 1-3 pieces per step, balance detail with clarity"}
-- Include a complete parts list at the end with totals
-- partsNeeded should use the structured format with part, color, and quantity
-- CRITICAL: Think through the entire build physically. Each step must logically follow the previous one. No piece should "float" — every piece must connect to an existing piece or the baseplate. If a piece would float, it is wrong.`;
-
-    const aiDecides = manual.page_count === 0;
-    const userPrompt = aiDecides
-      ? `Create a comprehensive LEGO building manual for: "${manual.title}"
-
-Description: ${manual.description}
-
-Generate as many steps as needed for a complete, detailed build. Do NOT skip steps. Every single piece placement should be documented. Return ONLY valid JSON.`
-      : `Create a ${manual.page_count}-page LEGO building manual for: "${manual.title}"
-
-Description: ${manual.description}
-
-Generate exactly ${manual.page_count} pages of step-by-step instructions, organized into logical sections. Return ONLY valid JSON.`;
-
-    const response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const phase2Response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${LOVABLE_API_KEY}`,
-        "Content-Type": "application/json",
-      },
+      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
         messages: [
-          { role: "system", content: systemPrompt },
-          { role: "user", content: userPrompt },
+          { role: "system", content: phase2SystemPrompt },
+          { role: "user", content: phase2UserPrompt },
         ],
-        tools: [
-          {
-            type: "function",
-            function: {
-              name: "create_manual",
-              description: "Create a LEGO instruction manual with sections and step-by-step pages",
-              parameters: {
-                type: "object",
-                properties: {
-                  difficulty: { type: "string" },
-                  style: { type: "string" },
-                  estimatedPieceCount: { type: "number" },
-                  sections: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        sectionTitle: { type: "string" },
-                        pages: {
-                          type: "array",
-                          items: {
-                            type: "object",
-                            properties: {
-                              pageNumber: { type: "number" },
-                              title: { type: "string" },
-                              instructions: { type: "string" },
-                              partsNeeded: {
-                                type: "array",
-                                items: {
-                                  type: "object",
-                                  properties: {
-                                    part: { type: "string" },
-                                    color: { type: "string" },
-                                    quantity: { type: "number" },
-                                    isExtra: { type: "boolean" },
-                                    sourceNote: { type: "string" },
-                                  },
-                                  required: ["part", "color", "quantity"],
-                                  additionalProperties: false,
-                                },
-                              },
-                              tip: { type: "string" },
-                            },
-                            required: ["pageNumber", "title", "instructions", "partsNeeded"],
-                            additionalProperties: false,
-                          },
-                        },
-                      },
-                      required: ["sectionTitle", "pages"],
-                      additionalProperties: false,
-                    },
-                  },
-                  partsList: {
-                    type: "array",
-                    items: {
-                      type: "object",
-                      properties: {
-                        part: { type: "string" },
-                        color: { type: "string" },
-                        quantity: { type: "number" },
-                      },
-                      required: ["part", "color", "quantity"],
-                      additionalProperties: false,
-                    },
-                  },
-                },
-                required: ["difficulty", "style", "estimatedPieceCount", "sections", "partsList"],
-                additionalProperties: false,
-              },
-            },
-          },
-        ],
-        tool_choice: { type: "function", function: { name: "create_manual" } },
       }),
     });
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error("AI gateway error:", response.status, errorText);
-
-      if (response.status === 429) {
-        await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (response.status === 402) {
-        await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
-          status: 402,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-
-      throw new Error("AI generation failed");
+    if (!phase2Response.ok) {
+      const errText = await phase2Response.text();
+      console.error("Phase 2 AI error:", phase2Response.status, errText);
+      throw new Error("Phase 2 AI generation failed");
     }
 
-    const aiResult = await response.json();
-    let content;
-
-    const toolCall = aiResult.choices?.[0]?.message?.tool_calls?.[0];
-    if (toolCall) {
-      content = JSON.parse(toolCall.function.arguments);
-    } else {
-      const text = aiResult.choices?.[0]?.message?.content || "";
-      const jsonMatch = text.match(/\{[\s\S]*\}/);
-      content = jsonMatch ? JSON.parse(jsonMatch[0]) : { sections: [], partsList: [] };
+    const phase2Result = await phase2Response.json();
+    const phase2Text = phase2Result.choices?.[0]?.message?.content || "";
+    const phase2JsonMatch = phase2Text.match(/\{[\s\S]*\}/);
+    let content: any;
+    try {
+      content = phase2JsonMatch ? JSON.parse(phase2JsonMatch[0]) : null;
+    } catch {
+      throw new Error("Phase 2 returned invalid JSON");
     }
+    if (!content?.sections?.length) throw new Error("Phase 2 returned no sections");
 
-    // Flatten pages for image generation
-    const allPages = content.sections?.flatMap((s: any) => s.pages) || content.pages || [];
+    console.log(`Phase 2 complete: steps generated across ${content.sections.length} sections`);
+
+    // Flatten all pages and sort by pageNumber
+    const allPages = (content.sections?.flatMap((s: any) => s.pages) || [])
+      .sort((a: any, b: any) => a.pageNumber - b.pageNumber);
+
+    // The finished model pieces — used to render each step image
+    const finishedPieces: any[] = content.finishedModel || modelDesign.pieces || [];
 
     console.log(`Generating images for ${allPages.length} steps...`);
 
-    // Generate images sequentially so each step has cumulative context
+    // Build a lookup of which piece IDs have been placed after each step
+    // so the image prompt knows exactly what to draw
+    const placedPieceIdsByStep: number[][] = [];
+    let runningIds: number[] = [];
     for (const page of allPages) {
-      try {
-        const partsStr = Array.isArray(page.partsNeeded)
-          ? page.partsNeeded.map((p: any) => typeof p === "string" ? p : `${p.quantity}x ${p.color} ${p.part}`).join(", ")
-          : "";
+      const ids: number[] = Array.isArray(page.pieceIds) ? page.pieceIds : [];
+      runningIds = [...runningIds, ...ids];
+      placedPieceIdsByStep.push([...runningIds]);
+    }
 
-        const cumulativeContext = buildCumulativeDescription(allPages, page.pageNumber);
+    for (let i = 0; i < allPages.length; i++) {
+      const page = allPages[i];
+      try {
+        // Pieces placed in THIS step
+        const newPieceIds: number[] = Array.isArray(page.pieceIds) ? page.pieceIds : [];
+        const newPieces = finishedPieces.filter((p: any) => newPieceIds.includes(p.id));
+
+        // All pieces placed so far (including this step)
+        const placedIds = placedPieceIdsByStep[i] || [];
+        const placedPieces = finishedPieces.filter((p: any) => placedIds.includes(p.id));
 
         const base64Image = await generateStepImage(
           page.title,
           page.instructions,
-          [partsStr],
+          newPieces.map((p: any) => `${p.color} ${p.part}`),
           manual.title,
           LOVABLE_API_KEY,
           page.pageNumber,
-          cumulativeContext
+          buildCumulativeDescription(allPages, page.pageNumber),
+          placedPieces,
+          newPieces,
+          modelDesign.hasBaseplate,
+          modelDesign.baseplateSize,
         );
 
         if (base64Image) {

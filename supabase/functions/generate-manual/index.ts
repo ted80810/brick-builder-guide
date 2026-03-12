@@ -365,25 +365,69 @@ Special: 1x1 round brick, 1x1 round plate, 2x2 round brick, 1x2 jumper plate, 1x
 
 VALID COLORS: Red, Blue, Yellow, Green, Orange, White, Black, Light Gray, Dark Gray, Brown, Dark Brown, Tan, Dark Tan, Sand Green, Sand Blue, Dark Blue, Dark Red, Lime Green, Dark Green, Medium Azure, Coral, Lavender, Dark Purple, Reddish Brown, Transparent Clear, Transparent Red, Transparent Blue, Transparent Yellow, Transparent Green`;
 
+    // ── Structural template: injected for known enclosed-structure builds ──
+    const titleLower = (manual.title || "").toLowerCase();
+    const isEnclosedStructure = /house|home|building|tower|castle|store|shop|barn|cabin|church|school|office|hotel|warehouse/.test(titleLower);
+    const isVehicle = /car|truck|train|plane|ship|boat|rocket|bus|tank/.test(titleLower);
+    const isAnimal = /dog|cat|horse|dragon|bird|fish|lion|bear|elephant/.test(titleLower);
+
+    let structuralTemplate = "";
+    if (isEnclosedStructure) {
+      structuralTemplate = `
+STRUCTURAL TEMPLATE — ENCLOSED BUILDING:
+You are designing a 3D enclosed structure. It MUST have all four walls AND a roof.
+Use this exact footprint pattern on a 16x16 baseplate:
+  • Back wall:      row 4,  cols 4–13, layers 1 to N   (2 studs deep, rowSpan=2)
+  • Front wall:     row 12, cols 4–13, layers 1 to N   (2 studs deep, rowSpan=2)
+  • Left side wall: col 4,  rows 4–13, layers 1 to N   (2 studs wide, colSpan=2)
+  • Right side wall:col 12, rows 4–13, layers 1 to N   (2 studs wide, colSpan=2)
+  • Door gap:       front wall cols 8–9 at layer 1 only (leave gap or use white/tan brick)
+  • Roof:           spans full footprint at layer N+1
+The build MUST span rows 4 through 13 (at least 8 distinct row values used).
+The build MUST span cols 4 through 13 (at least 8 distinct col values used).
+A two-story house needs layers 1–5 minimum. A tower needs 6+ layers.
+DO NOT place all pieces at the same row. A flat facade is NOT valid.`;
+    } else if (isVehicle) {
+      structuralTemplate = `
+STRUCTURAL TEMPLATE — VEHICLE:
+Design a 3D vehicle body. It must have length (col span ≥ 8), width (row span ≥ 4), and height (layers ≥ 3).
+Centre the vehicle on the baseplate. Use dark colors for wheels/tyres, bright for body.`;
+    } else if (isAnimal) {
+      structuralTemplate = `
+STRUCTURAL TEMPLATE — ANIMAL:
+Design a 3D animal using a mosaic/sculpted approach. The body should span at least 6 cols × 4 rows × 3 layers.
+Use tan/brown for body, darker for features. Legs at corners, head projecting forward.`;
+    }
+
     const phase1SystemPrompt = `You are a LEGO set designer. Your job is to design a complete, finished LEGO model by laying out every single piece at exact stud-grid coordinates.
 
 ${REAL_LEGO_PARTS}
 
 COORDINATE SYSTEM:
 - The build sits on a baseplate. Front-left stud = column 1, row 1. Columns increase left→right (X). Rows increase front→back (Y). Layers increase bottom→up (Z). Layer 1 = first brick layer on top of baseplate surface.
-- A 2x4 brick placed horizontally at col 3, row 5, layer 1 occupies cols 3–6, row 5 (colSpan=4, rowSpan=2). Wait — a 2x4 is 2 studs wide × 4 studs long. If horizontal (long axis = columns), colSpan=4, rowSpan=2. If vertical (long axis = rows), colSpan=2, rowSpan=4.
-- A 1x2 plate placed vertically at col 4, row 2 occupies col 4, rows 2–3 (colSpan=1, rowSpan=2).
-- Pieces MUST physically connect: every piece at layer N must have a piece directly below it at layer N-1 (or the baseplate at layer 0). No floating pieces.
+- A 2x4 brick placed horizontally at col 3, row 5, layer 1 occupies cols 3–6, rows 5–6 (colSpan=4, rowSpan=2).
+- A 2x4 brick placed VERTICALLY at col 3, row 5, layer 1 occupies cols 3–4, rows 5–8 (colSpan=2, rowSpan=4).
+- A 1x2 plate placed horizontally: colSpan=2, rowSpan=1. Placed vertically: colSpan=1, rowSpan=2.
+- Pieces MUST physically connect: every piece at layer N must sit on a piece at layer N-1 (or baseplate at layer 0). No floating pieces.
 
-CRITICAL — USE THE FULL GRID, NOT JUST THE CENTRE:
-- For a 16×16 baseplate, use columns 1–16 and rows 1–16 fully. Do not cluster all pieces in one corner.
-- Centre your build. A shape that is 10 studs wide should start around column 3–4 to centre on a 16×16 plate.
-- For geographic/map builds (e.g. "Map of New Jersey", "Map of Texas"): think about the silhouette of the region. Use plates to trace the outline before stacking bricks on top. Lay pieces flat (layer 1) to cover the correct geographic footprint first.
+CRITICAL — 3D DEPTH REQUIRED:
+- The build MUST use at least 6 distinct row values. Do NOT place all pieces at the same row.
+- The build MUST use at least 6 distinct col values.
+- A flat facade (all pieces at row 6–7) is WRONG and invalid.
+- Use the full grid: centre a 10-stud-wide shape around cols 3–12 on a 16×16 base.
+${structuralTemplate}
 
 PIECE SIZING — CRITICAL:
-- A "2x4 Brick" has 2 rows × 4 columns of studs. colSpan must match the stud count.
-- A "1x2 plate" has 1 row × 2 columns (colSpan=2, rowSpan=1 if horizontal; colSpan=1, rowSpan=2 if vertical).
+- colSpan = number of studs in the column (left-right) direction.
+- rowSpan = number of studs in the row (front-back) direction.
+- A "2x4 Brick": the first number is rows (2), second is columns (4). Horizontal: colSpan=4, rowSpan=2.
 - NEVER set colSpan or rowSpan to 0. Minimum is 1.
+
+SELF-CHECK — before returning JSON, verify:
+1. Are there pieces at 6+ distinct row values? If not, redesign with proper depth.
+2. Are there pieces at 6+ distinct col values? If not, widen the build.
+3. Is max(layer) >= 3? If not, add more height.
+4. Does every piece at layer N have support at layer N-1 or the baseplate? Fix any floaters.
 
 Style: ${styleDescriptions[stylePreset] || styleDescriptions.classic}
 Difficulty: ${difficultyLevel}
@@ -428,6 +472,7 @@ Think carefully about the physical structure. No piece may float.`;
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
+        max_tokens: 4096,
         messages: [
           { role: "system", content: phase1SystemPrompt },
           { role: "user", content: phase1UserPrompt },
@@ -528,6 +573,7 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
+        max_tokens: 4096,
         messages: [
           { role: "system", content: phase2SystemPrompt },
           { role: "user", content: phase2UserPrompt },

@@ -472,7 +472,7 @@ Think carefully about the physical structure. No piece may float.`;
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
-        max_tokens: 4096,
+        max_tokens: 16384,
         messages: [
           { role: "system", content: phase1SystemPrompt },
           { role: "user", content: phase1UserPrompt },

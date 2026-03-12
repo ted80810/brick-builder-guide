@@ -573,7 +573,7 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
-        max_tokens: 4096,
+        max_tokens: 16384,
         messages: [
           { role: "system", content: phase2SystemPrompt },
           { role: "user", content: phase2UserPrompt },

@@ -573,7 +573,7 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
       headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
       body: JSON.stringify({
         model: "google/gemini-3-flash-preview",
-        max_tokens: 4096,
+        max_tokens: 16384,
         messages: [
           { role: "system", content: phase2SystemPrompt },
           { role: "user", content: phase2UserPrompt },
@@ -590,10 +590,14 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
     const phase2Result = await phase2Response.json();
     const phase2Text = phase2Result.choices?.[0]?.message?.content || "";
     const phase2JsonMatch = phase2Text.match(/\{[\s\S]*\}/);
+    if (!phase2JsonMatch) {
+      console.error("Phase 2 raw text (no JSON found):", phase2Text.substring(0, 500));
+    }
     let content: any;
     try {
       content = phase2JsonMatch ? JSON.parse(phase2JsonMatch[0]) : null;
-    } catch {
+    } catch (parseErr) {
+      console.error("Phase 2 JSON parse error. Last 200 chars:", phase2Text.substring(phase2Text.length - 200));
       throw new Error("Phase 2 returned invalid JSON");
     }
     if (!content?.sections?.length) throw new Error("Phase 2 returned no sections");

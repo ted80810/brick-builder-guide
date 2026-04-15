@@ -584,7 +584,7 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
     }
 
     const phase2Result = await phase2Response.json();
-    const phase2Text = phase2Result.choices?.[0]?.message?.content || "";
+    const phase2Text = phase2Result.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const phase2JsonMatch = phase2Text.match(/\{[\s\S]*\}/);
     if (!phase2JsonMatch) {
       console.error("Phase 2 raw text (no JSON found):", phase2Text.substring(0, 500));

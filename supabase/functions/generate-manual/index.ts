@@ -302,8 +302,8 @@ serve(async (req) => {
 
     await supabase.from("manuals").update({ status: "generating" }).eq("id", manualId);
 
-    const LOVABLE_API_KEY = Deno.env.get("LOVABLE_API_KEY");
-    if (!LOVABLE_API_KEY) throw new Error("LOVABLE_API_KEY not configured");
+    const GOOGLE_AI_API_KEY = Deno.env.get("GOOGLE_AI_API_KEY");
+    if (!GOOGLE_AI_API_KEY) throw new Error("GOOGLE_AI_API_KEY not configured");
 
     const difficultyLevel = difficulty || "Beginner";
     const stylePreset = style || "classic";
@@ -467,16 +467,14 @@ Return ONLY a JSON object with this structure:
 Orientation must be "horizontal" (long axis runs left-right, colSpan > rowSpan) or "vertical" (long axis runs front-back, rowSpan > colSpan). For square pieces (1x1, 2x2 etc) use "horizontal".
 Think carefully about the physical structure. No piece may float.`;
 
-    const phase1Response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const phase1Response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_AI_API_KEY}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        max_tokens: 16384,
-        messages: [
-          { role: "system", content: phase1SystemPrompt },
-          { role: "user", content: phase1UserPrompt },
+        contents: [
+          { role: "user", parts: [{ text: phase1SystemPrompt + "\n\n" + phase1UserPrompt }] },
         ],
+        generationConfig: { maxOutputTokens: 16384 },
       }),
     });
 
@@ -499,7 +497,7 @@ Think carefully about the physical structure. No piece may float.`;
     }
 
     const phase1Result = await phase1Response.json();
-    const phase1Text = phase1Result.choices?.[0]?.message?.content || "";
+    const phase1Text = phase1Result.candidates?.[0]?.content?.parts?.[0]?.text || "";
     const phase1JsonMatch = phase1Text.match(/\{[\s\S]*\}/);
     let modelDesign: any;
     try {
@@ -568,16 +566,14 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
   "partsList": ${JSON.stringify(modelDesign.partsList)}
 }`;
 
-    const phase2Response = await fetch("https://ai.gateway.lovable.dev/v1/chat/completions", {
+    const phase2Response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_AI_API_KEY}`, {
       method: "POST",
-      headers: { Authorization: `Bearer ${LOVABLE_API_KEY}`, "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "google/gemini-3-flash-preview",
-        max_tokens: 16384,
-        messages: [
-          { role: "system", content: phase2SystemPrompt },
-          { role: "user", content: phase2UserPrompt },
+        contents: [
+          { role: "user", parts: [{ text: phase2SystemPrompt + "\n\n" + phase2UserPrompt }] },
         ],
+        generationConfig: { maxOutputTokens: 16384 },
       }),
     });
 

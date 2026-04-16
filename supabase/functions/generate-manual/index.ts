@@ -353,24 +353,41 @@ async function generateStructuredJson(params: {
   ];
 
   for (let attempt = 0; attempt < retryInstructions.length; attempt++) {
-    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${params.apiKey}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        systemInstruction: {
-          role: "system",
-          parts: [{ text: `${params.systemPrompt}\n\n${retryInstructions[attempt]}`.trim() }],
-        },
-        contents: [{ role: "user", parts: [{ text: params.userPrompt }] }],
-        generationConfig: {
-          maxOutputTokens: attempt === 0 ? params.maxOutputTokens : Math.min(params.maxOutputTokens * 2, 32768),
-          temperature: 0.15,
-          responseMimeType: "application/json",
-        },
-      }),
-    });
+    // Retry loop for transient API errors (429, 503)
+    let response: Response | null = null;
+    let rawBody = "";
+    const MAX_RETRIES = 3;
+    for (let apiRetry = 0; apiRetry < MAX_RETRIES; apiRetry++) {
+      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${params.apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          systemInstruction: {
+            role: "system",
+            parts: [{ text: `${params.systemPrompt}\n\n${retryInstructions[attempt]}`.trim() }],
+          },
+          contents: [{ role: "user", parts: [{ text: params.userPrompt }] }],
+          generationConfig: {
+            maxOutputTokens: attempt === 0 ? params.maxOutputTokens : Math.min(params.maxOutputTokens * 2, 32768),
+            temperature: 0.15,
+            responseMimeType: "application/json",
+          },
+        }),
+      });
 
-    const rawBody = await response.text();
+      rawBody = await response.text();
+
+      if (response.status === 429 || response.status === 503) {
+        const waitMs = Math.min(2000 * Math.pow(2, apiRetry), 16000);
+        console.warn(`${params.phaseName} got ${response.status}, retrying in ${waitMs}ms (attempt ${apiRetry + 1}/${MAX_RETRIES})`);
+        await new Promise(r => setTimeout(r, waitMs));
+        continue;
+      }
+      break;
+    }
+
+    if (!response) throw new Error(`${params.phaseName} no response after retries`);
+
     let result: any = null;
 
     try {

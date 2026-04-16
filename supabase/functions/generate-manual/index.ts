@@ -271,6 +271,141 @@ function renderStepSVG(params: {
 </svg>`;
 }
 
+class GeminiApiError extends Error {
+  status: number;
+  details: string;
+
+  constructor(message: string, status: number, details: string) {
+    super(message);
+    this.name = "GeminiApiError";
+    this.status = status;
+    this.details = details;
+  }
+}
+
+function extractGeminiText(result: any): string {
+  const parts = result?.candidates?.[0]?.content?.parts;
+  if (!Array.isArray(parts)) return "";
+
+  return parts
+    .map((part: any) => (typeof part?.text === "string" ? part.text : ""))
+    .join("")
+    .trim();
+}
+
+function extractBalancedJson(rawText: string): string | null {
+  const cleaned = rawText
+    .trim()
+    .replace(/^```json\s*/i, "")
+    .replace(/^```\s*/i, "")
+    .replace(/```\s*$/i, "")
+    .trim();
+
+  const start = cleaned.search(/[\[{]/);
+  if (start === -1) return null;
+
+  const opening = cleaned[start];
+  const closing = opening === "{" ? "}" : "]";
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = start; i < cleaned.length; i++) {
+    const char = cleaned[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === opening) depth++;
+    if (char === closing) depth--;
+
+    if (depth === 0) {
+      return cleaned.slice(start, i + 1);
+    }
+  }
+
+  return null;
+}
+
+async function generateStructuredJson(params: {
+  apiKey: string;
+  phaseName: string;
+  systemPrompt: string;
+  userPrompt: string;
+  maxOutputTokens: number;
+}) {
+  const retryInstructions = [
+    "",
+    "CRITICAL: Return only one valid JSON object. No markdown, no code fences, no explanations, no trailing text, and ensure every string is properly escaped.",
+  ];
+
+  for (let attempt = 0; attempt < retryInstructions.length; attempt++) {
+    const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${params.apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        systemInstruction: {
+          role: "system",
+          parts: [{ text: `${params.systemPrompt}\n\n${retryInstructions[attempt]}`.trim() }],
+        },
+        contents: [{ role: "user", parts: [{ text: params.userPrompt }] }],
+        generationConfig: {
+          maxOutputTokens: attempt === 0 ? params.maxOutputTokens : Math.min(params.maxOutputTokens * 2, 32768),
+          temperature: 0.15,
+          responseMimeType: "application/json",
+        },
+      }),
+    });
+
+    const rawBody = await response.text();
+    let result: any = null;
+
+    try {
+      result = rawBody ? JSON.parse(rawBody) : null;
+    } catch {
+      console.error(`${params.phaseName} raw API response was not JSON:`, rawBody.slice(0, 800));
+      throw new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
+    }
+
+    if (!response.ok) {
+      console.error(`${params.phaseName} AI error:`, response.status, rawBody.slice(0, 800));
+      throw new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
+    }
+
+    const responseText = extractGeminiText(result);
+    const jsonText = extractBalancedJson(responseText);
+
+    if (jsonText) {
+      try {
+        return JSON.parse(jsonText);
+      } catch (parseError) {
+        console.error(`${params.phaseName} JSON parse failed on attempt ${attempt + 1}:`, parseError);
+      }
+    }
+
+    console.error(`${params.phaseName} invalid JSON attempt ${attempt + 1}:`, {
+      finishReason: result?.candidates?.[0]?.finishReason,
+      preview: responseText.slice(0, 500),
+      tail: responseText.slice(-200),
+    });
+  }
+
+  throw new Error(`${params.phaseName} returned invalid JSON`);
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -467,43 +602,35 @@ Return ONLY a JSON object with this structure:
 Orientation must be "horizontal" (long axis runs left-right, colSpan > rowSpan) or "vertical" (long axis runs front-back, rowSpan > colSpan). For square pieces (1x1, 2x2 etc) use "horizontal".
 Think carefully about the physical structure. No piece may float.`;
 
-    const phase1Response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_AI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          { role: "user", parts: [{ text: phase1SystemPrompt + "\n\n" + phase1UserPrompt }] },
-        ],
-        generationConfig: { maxOutputTokens: 16384 },
-      }),
-    });
-
-    if (!phase1Response.ok) {
-      const errText = await phase1Response.text();
-      console.error("Phase 1 AI error:", phase1Response.status, errText);
-      if (phase1Response.status === 429) {
-        await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
-        return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-          status: 429, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      if (phase1Response.status === 402) {
-        await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
-        return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
-          status: 402, headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
-      }
-      throw new Error("Phase 1 AI generation failed");
-    }
-
-    const phase1Result = await phase1Response.json();
-    const phase1Text = phase1Result.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const phase1JsonMatch = phase1Text.match(/\{[\s\S]*\}/);
     let modelDesign: any;
     try {
-      modelDesign = phase1JsonMatch ? JSON.parse(phase1JsonMatch[0]) : null;
-    } catch {
-      throw new Error("Phase 1 returned invalid JSON");
+      modelDesign = await generateStructuredJson({
+        apiKey: GOOGLE_AI_API_KEY,
+        phaseName: "Phase 1",
+        systemPrompt: phase1SystemPrompt,
+        userPrompt: phase1UserPrompt,
+        maxOutputTokens: 16384,
+      });
+    } catch (error) {
+      if (error instanceof GeminiApiError) {
+        if (error.status === 429) {
+          await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
+          return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
+            status: 429,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        if (error.status === 402) {
+          await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
+          return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
+            status: 402,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+      }
+
+      throw error;
     }
     if (!modelDesign?.pieces?.length) throw new Error("Phase 1 returned no pieces");
 
@@ -566,35 +693,20 @@ Decompose this into step-by-step build instructions. Return ONLY a JSON object w
   "partsList": ${JSON.stringify(modelDesign.partsList)}
 }`;
 
-    const phase2Response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${GOOGLE_AI_API_KEY}`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        contents: [
-          { role: "user", parts: [{ text: phase2SystemPrompt + "\n\n" + phase2UserPrompt }] },
-        ],
-        generationConfig: { maxOutputTokens: 16384 },
-      }),
-    });
-
-    if (!phase2Response.ok) {
-      const errText = await phase2Response.text();
-      console.error("Phase 2 AI error:", phase2Response.status, errText);
-      throw new Error("Phase 2 AI generation failed");
-    }
-
-    const phase2Result = await phase2Response.json();
-    const phase2Text = phase2Result.candidates?.[0]?.content?.parts?.[0]?.text || "";
-    const phase2JsonMatch = phase2Text.match(/\{[\s\S]*\}/);
-    if (!phase2JsonMatch) {
-      console.error("Phase 2 raw text (no JSON found):", phase2Text.substring(0, 500));
-    }
     let content: any;
     try {
-      content = phase2JsonMatch ? JSON.parse(phase2JsonMatch[0]) : null;
-    } catch (parseErr) {
-      console.error("Phase 2 JSON parse error. Last 200 chars:", phase2Text.substring(phase2Text.length - 200));
-      throw new Error("Phase 2 returned invalid JSON");
+      content = await generateStructuredJson({
+        apiKey: GOOGLE_AI_API_KEY,
+        phaseName: "Phase 2",
+        systemPrompt: phase2SystemPrompt,
+        userPrompt: phase2UserPrompt,
+        maxOutputTokens: 16384,
+      });
+    } catch (error) {
+      if (error instanceof GeminiApiError) {
+        console.error("Phase 2 AI error details:", error.status, error.details.slice(0, 800));
+      }
+      throw error;
     }
     if (!content?.sections?.length) throw new Error("Phase 2 returned no sections");
 

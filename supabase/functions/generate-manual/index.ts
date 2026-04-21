@@ -351,73 +351,94 @@ async function generateStructuredJson(params: {
     "",
     "CRITICAL: Return only one valid JSON object. No markdown, no code fences, no explanations, no trailing text, and ensure every string is properly escaped.",
   ];
+  const modelCandidates = ["gemini-2.5-flash", "gemini-2.5-flash-lite"];
 
   for (let attempt = 0; attempt < retryInstructions.length; attempt++) {
-    // Retry loop for transient API errors (429, 503)
-    let response: Response | null = null;
-    let rawBody = "";
-    const MAX_RETRIES = 3;
-    for (let apiRetry = 0; apiRetry < MAX_RETRIES; apiRetry++) {
-      response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${params.apiKey}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          systemInstruction: {
-            role: "system",
-            parts: [{ text: `${params.systemPrompt}\n\n${retryInstructions[attempt]}`.trim() }],
-          },
-          contents: [{ role: "user", parts: [{ text: params.userPrompt }] }],
-          generationConfig: {
-            maxOutputTokens: attempt === 0 ? params.maxOutputTokens : Math.min(params.maxOutputTokens * 2, 32768),
-            temperature: 0.15,
-            responseMimeType: "application/json",
-          },
-        }),
-      });
+    let lastGeminiError: GeminiApiError | null = null;
 
-      rawBody = await response.text();
+    for (const modelName of modelCandidates) {
+      let response: Response | null = null;
+      let rawBody = "";
+      const MAX_RETRIES = 3;
 
-      if (response.status === 429 || response.status === 503) {
-        const waitMs = Math.min(2000 * Math.pow(2, apiRetry), 16000);
-        console.warn(`${params.phaseName} got ${response.status}, retrying in ${waitMs}ms (attempt ${apiRetry + 1}/${MAX_RETRIES})`);
-        await new Promise(r => setTimeout(r, waitMs));
-        continue;
+      for (let apiRetry = 0; apiRetry < MAX_RETRIES; apiRetry++) {
+        response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${params.apiKey}`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            systemInstruction: {
+              role: "system",
+              parts: [{ text: `${params.systemPrompt}\n\n${retryInstructions[attempt]}`.trim() }],
+            },
+            contents: [{ role: "user", parts: [{ text: params.userPrompt }] }],
+            generationConfig: {
+              maxOutputTokens: attempt === 0 ? params.maxOutputTokens : Math.min(params.maxOutputTokens * 2, 32768),
+              temperature: 0.15,
+              responseMimeType: "application/json",
+            },
+          }),
+        });
+
+        rawBody = await response.text();
+
+        if (response.status === 429 || response.status === 503) {
+          if (apiRetry < MAX_RETRIES - 1) {
+            const waitMs = Math.min(2000 * Math.pow(2, apiRetry), 16000);
+            console.warn(`${params.phaseName} using ${modelName} got ${response.status}, retrying in ${waitMs}ms (attempt ${apiRetry + 1}/${MAX_RETRIES})`);
+            await new Promise((r) => setTimeout(r, waitMs));
+            continue;
+          }
+
+          lastGeminiError = new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
+          console.warn(`${params.phaseName} switching models after ${response.status} from ${modelName}`);
+        }
+
+        break;
       }
-      break;
-    }
 
-    if (!response) throw new Error(`${params.phaseName} no response after retries`);
+      if (!response) continue;
 
-    let result: any = null;
+      let result: any = null;
 
-    try {
-      result = rawBody ? JSON.parse(rawBody) : null;
-    } catch {
-      console.error(`${params.phaseName} raw API response was not JSON:`, rawBody.slice(0, 800));
-      throw new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
-    }
-
-    if (!response.ok) {
-      console.error(`${params.phaseName} AI error:`, response.status, rawBody.slice(0, 800));
-      throw new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
-    }
-
-    const responseText = extractGeminiText(result);
-    const jsonText = extractBalancedJson(responseText);
-
-    if (jsonText) {
       try {
-        return JSON.parse(jsonText);
-      } catch (parseError) {
-        console.error(`${params.phaseName} JSON parse failed on attempt ${attempt + 1}:`, parseError);
+        result = rawBody ? JSON.parse(rawBody) : null;
+      } catch {
+        console.error(`${params.phaseName} raw API response from ${modelName} was not JSON:`, rawBody.slice(0, 800));
+        throw new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
       }
+
+      if (!response.ok) {
+        console.error(`${params.phaseName} AI error from ${modelName}:`, response.status, rawBody.slice(0, 800));
+
+        if ((response.status === 429 || response.status === 503) && modelName !== modelCandidates[modelCandidates.length - 1]) {
+          lastGeminiError = new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
+          continue;
+        }
+
+        throw new GeminiApiError(`${params.phaseName} AI generation failed`, response.status, rawBody);
+      }
+
+      const responseText = extractGeminiText(result);
+      const jsonText = extractBalancedJson(responseText);
+
+      if (jsonText) {
+        try {
+          return JSON.parse(jsonText);
+        } catch (parseError) {
+          console.error(`${params.phaseName} JSON parse failed on attempt ${attempt + 1} with ${modelName}:`, parseError);
+        }
+      }
+
+      console.error(`${params.phaseName} invalid JSON attempt ${attempt + 1} with ${modelName}:`, {
+        finishReason: result?.candidates?.[0]?.finishReason,
+        preview: responseText.slice(0, 500),
+        tail: responseText.slice(-200),
+      });
     }
 
-    console.error(`${params.phaseName} invalid JSON attempt ${attempt + 1}:`, {
-      finishReason: result?.candidates?.[0]?.finishReason,
-      preview: responseText.slice(0, 500),
-      tail: responseText.slice(-200),
-    });
+    if (lastGeminiError) {
+      throw lastGeminiError;
+    }
   }
 
   throw new Error(`${params.phaseName} returned invalid JSON`);
@@ -642,6 +663,14 @@ Think carefully about the physical structure. No piece may float.`;
           await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
           return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
             status: 402,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          });
+        }
+
+        if (error.status === 503) {
+          await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
+          return new Response(JSON.stringify({ error: "AI service is temporarily busy. Please try again in a moment." }), {
+            status: 503,
             headers: { ...corsHeaders, "Content-Type": "application/json" },
           });
         }

@@ -121,6 +121,21 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
         manual_id: manual.id,
       } as any);
 
+      toast({ title: "Generation started!", description: "Your manual is being built — this usually takes 30–90 seconds." });
+      navigate(`/manual/${manual.id}`);
+
+      // Save to prompt history
+      await supabase.from("prompt_history").insert({
+        user_id: user.id,
+        title,
+        description: idea,
+        page_count: pageCount,
+        difficulty: DIFFICULTY_LABELS[difficulty],
+        piece_target: pieceTarget ? parseInt(pieceTarget) : null,
+        style,
+        manual_id: manual.id,
+      } as any);
+
       toast({ title: "Manual generated!", description: "Your instruction manual is ready to view." });
       navigate(`/manual/${manual.id}`);
     } catch (err: any) {

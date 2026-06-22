@@ -444,6 +444,420 @@ async function generateStructuredJson(params: {
   throw new Error(`${params.phaseName} returned invalid JSON`);
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Validation: programmatic checks on the Phase 1 design
+// ─────────────────────────────────────────────────────────────────────────────
+function validateDesign(design: any, opts: { isVehicle: boolean; isAnimal: boolean }): string[] {
+  const errors: string[] = [];
+  const pieces = Array.isArray(design?.pieces) ? design.pieces : [];
+
+  if (pieces.length === 0) {
+    errors.push("Design has no pieces.");
+    return errors;
+  }
+
+  // Per-piece sanity
+  for (const p of pieces) {
+    if (typeof p.id !== "number") errors.push(`Piece missing numeric id: ${JSON.stringify(p).slice(0, 80)}`);
+    if (!p.part || typeof p.part !== "string") errors.push(`Piece ${p.id} missing 'part'`);
+    if (!p.color || typeof p.color !== "string") errors.push(`Piece ${p.id} missing 'color'`);
+    const cs = Number(p.colSpan), rs = Number(p.rowSpan);
+    if (!Number.isFinite(cs) || cs < 1) errors.push(`Piece ${p.id} has invalid colSpan=${p.colSpan}`);
+    if (!Number.isFinite(rs) || rs < 1) errors.push(`Piece ${p.id} has invalid rowSpan=${p.rowSpan}`);
+    if (!Number.isFinite(Number(p.col)) || p.col < 1) errors.push(`Piece ${p.id} has invalid col=${p.col}`);
+    if (!Number.isFinite(Number(p.row)) || p.row < 1) errors.push(`Piece ${p.id} has invalid row=${p.row}`);
+    if (!Number.isFinite(Number(p.layer)) || p.layer < 1) errors.push(`Piece ${p.id} has invalid layer=${p.layer}`);
+  }
+
+  // Spatial extent
+  const rows = new Set<number>();
+  const cols = new Set<number>();
+  let maxLayer = 0;
+  for (const p of pieces) {
+    for (let dr = 0; dr < (p.rowSpan || 1); dr++) rows.add((p.row || 1) + dr);
+    for (let dc = 0; dc < (p.colSpan || 1); dc++) cols.add((p.col || 1) + dc);
+    if ((p.layer || 1) > maxLayer) maxLayer = p.layer || 1;
+  }
+
+  const minDistinct = opts.isVehicle || opts.isAnimal ? 4 : 6;
+  if (rows.size < minDistinct) errors.push(`Build spans only ${rows.size} distinct rows; need ≥ ${minDistinct}. Add depth front-to-back.`);
+  if (cols.size < minDistinct) errors.push(`Build spans only ${cols.size} distinct cols; need ≥ ${minDistinct}. Widen the build.`);
+  if (maxLayer < 3) errors.push(`Build is only ${maxLayer} layer(s) tall; need ≥ 3. Add height.`);
+
+  // Floating pieces check — every layer-N piece needs layer-(N-1) overlap or baseplate
+  const hasBaseplate = !!design.hasBaseplate;
+  const byLayer = new Map<number, any[]>();
+  for (const p of pieces) {
+    const arr = byLayer.get(p.layer) || [];
+    arr.push(p);
+    byLayer.set(p.layer, arr);
+  }
+  function overlaps(a: any, b: any) {
+    const ax1 = a.col, ax2 = a.col + (a.colSpan || 1);
+    const ay1 = a.row, ay2 = a.row + (a.rowSpan || 1);
+    const bx1 = b.col, bx2 = b.col + (b.colSpan || 1);
+    const by1 = b.row, by2 = b.row + (b.rowSpan || 1);
+    return ax1 < bx2 && bx1 < ax2 && ay1 < by2 && by1 < ay2;
+  }
+  let floaters = 0;
+  for (const p of pieces) {
+    if (p.layer === 1) {
+      if (!hasBaseplate) {
+        // ok — sits on table
+      }
+      continue;
+    }
+    const below = byLayer.get((p.layer || 1) - 1) || [];
+    const supported = below.some((b) => overlaps(p, b));
+    if (!supported) floaters++;
+  }
+  if (floaters > 0) errors.push(`${floaters} piece(s) float without support from the layer below.`);
+
+  return errors;
+}
+
+// Simple concurrency limiter for image uploads
+async function runWithConcurrency<T>(tasks: (() => Promise<T>)[], limit: number): Promise<T[]> {
+  const results: T[] = new Array(tasks.length);
+  let cursor = 0;
+  async function worker() {
+    while (cursor < tasks.length) {
+      const idx = cursor++;
+      try {
+        results[idx] = await tasks[idx]();
+      } catch (e) {
+        // @ts-ignore — store error inline so caller can inspect
+        results[idx] = e as T;
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, () => worker()));
+  return results;
+}
+
+// Style palette hints fed into Phase 1
+const STYLE_PALETTES: Record<string, string> = {
+  classic: "Bright primary colors: Red, Blue, Yellow, Green, White, Black.",
+  retro: "Muted vintage palette: Tan, Brown, Reddish Brown, Sand Green, Dark Red, Dark Tan.",
+  futuristic: "Sleek sci-fi palette: Light Gray, Dark Gray, Medium Azure, White, Black, Transparent Blue.",
+  minimalist: "Limited palette: White, Light Gray, one accent color only.",
+  detailed: "Wide palette with realistic colors matching the subject.",
+  whimsical: "Playful unexpected palette: Coral, Lavender, Lime Green, Medium Azure, Yellow.",
+};
+
+// Minimal piece inventory hints per known set — gives Gemini a realistic constraint
+const SET_INVENTORY: Record<string, string> = {
+  "10698": "Classic Large Brick Box: 1x1–2x4 bricks/plates in all bright colors, slopes, basic tiles, a 16x16 and 8x16 baseplate. NO Technic, NO large windows.",
+  "10696": "Medium Brick Box: 1x1–2x4 bricks/plates in bright colors, a few slopes and tiles. NO Technic.",
+  "11717": "Bricks Bricks Plates: 1x1–2x4 bricks and plates only, bright + tan + brown.",
+  "11013": "Creative Transparent Bricks: transparent 1x1–2x4 bricks/plates only.",
+  "11014": "Bricks and Wheels: standard bricks plus several wheels, axles, plates.",
+  "11030": "Lots of Bricks: 1x1–2x4 bricks in many colors, basic plates.",
+};
+
+interface RunArgs {
+  supabase: any;
+  manualId: string;
+  manual: any;
+  difficulty: string;
+  pieceTarget: number | null;
+  style: string;
+  selectedSets: string[] | null;
+  allowExtras: boolean;
+  apiKey: string;
+}
+
+async function markFailed(supabase: any, manualId: string, message: string) {
+  await supabase
+    .from("manuals")
+    .update({ status: "failed", content: { error: message } })
+    .eq("id", manualId);
+}
+
+async function runPipeline(args: RunArgs) {
+  const { supabase, manualId, manual, difficulty, pieceTarget, style, selectedSets, allowExtras, apiKey } = args;
+
+  const difficultyLevel = difficulty || "Beginner";
+  const stylePreset = style || "classic";
+  const pieceConstraint = pieceTarget
+    ? `\nIMPORTANT: The total build should use approximately ${pieceTarget} pieces or fewer. Keep the parts list realistic and shoppable.`
+    : "";
+
+  const stylePalette = STYLE_PALETTES[stylePreset] || STYLE_PALETTES.classic;
+
+  const difficultyHints: Record<string, string> = {
+    Beginner: "Use only basic bricks, plates, and tiles. No slopes, no special pieces. Aim for 20–60 pieces.",
+    Intermediate: "Use bricks, plates, tiles, and slopes. A few special pieces (windows, rounds) allowed. Aim for 60–200 pieces.",
+    Advanced: "Use the full piece catalog including slopes, jumpers, pillars, and special pieces. Complex layered designs.",
+  };
+  const difficultyHint = difficultyHints[difficultyLevel] || difficultyHints.Beginner;
+
+  // LEGO set constraint
+  let setConstraintPrompt = "";
+  if (selectedSets && selectedSets.length > 0) {
+    const inventoryLines = selectedSets
+      .map((id) => SET_INVENTORY[id])
+      .filter(Boolean)
+      .join("\n");
+    const inventoryBlock = inventoryLines ? `\nSet inventories:\n${inventoryLines}` : "";
+    if (allowExtras) {
+      setConstraintPrompt = `\n\nLEGO SET CONSTRAINT: The user owns these LEGO sets (ids: ${selectedSets.join(", ")}).${inventoryBlock}
+PREFER pieces from these sets. If a piece is NOT in any selected set, mark it with "isExtra": true and "sourceNote": "Available in [real LEGO set name]".`;
+    } else {
+      setConstraintPrompt = `\n\nLEGO SET CONSTRAINT (STRICT): The user owns these LEGO sets (ids: ${selectedSets.join(", ")}).${inventoryBlock}
+ONLY use pieces that exist in those sets. Simplify the design if you cannot fit it within the available pieces.`;
+    }
+  }
+
+  // Detect archetype from both title AND description
+  const haystack = `${manual.title || ""} ${manual.description || ""}`.toLowerCase();
+  const isEnclosedStructure = /house|home|building|tower|castle|store|shop|barn|cabin|church|school|office|hotel|warehouse|cottage|hut|temple|pyramid|fort/.test(haystack);
+  const isVehicle = /car|truck|train|plane|ship|boat|rocket|bus|tank|jet|helicopter|submarine|spaceship/.test(haystack);
+  const isAnimal = /dog|cat|horse|dragon|bird|fish|lion|bear|elephant|wolf|tiger|fox|rabbit|owl|whale|shark/.test(haystack);
+
+  let structuralTemplate = "";
+  if (isEnclosedStructure) {
+    structuralTemplate = `
+STRUCTURAL TEMPLATE — ENCLOSED BUILDING:
+You are designing a 3D enclosed structure with four walls AND a roof, on a 16x16 baseplate.
+  • Back wall:      row 4,  cols 4–13, layers 1 to N   (rowSpan=2)
+  • Front wall:     row 12, cols 4–13, layers 1 to N   (rowSpan=2)
+  • Left side wall: col 4,  rows 4–13, layers 1 to N   (colSpan=2)
+  • Right side wall:col 12, rows 4–13, layers 1 to N   (colSpan=2)
+  • Door gap:       front wall cols 8–9 at layer 1 only
+  • Roof:           spans full footprint at layer N+1
+Span rows 4–13 and cols 4–13. Two-story = layers 1–5 minimum. Tower = layers 6+.`;
+  } else if (isVehicle) {
+    structuralTemplate = `
+STRUCTURAL TEMPLATE — VEHICLE:
+3D vehicle body: col span ≥ 8, row span ≥ 4, layers ≥ 3. Centre on baseplate. Dark wheels, bright body.`;
+  } else if (isAnimal) {
+    structuralTemplate = `
+STRUCTURAL TEMPLATE — ANIMAL:
+3D sculpted animal: at least 6 cols × 4 rows × 3 layers. Body in tan/brown, features darker. Legs at corners.`;
+  }
+
+  const REAL_LEGO_PARTS = `VALID LEGO PIECE CATALOG (only use pieces from this list):
+Bricks: 1x1, 1x2, 1x3, 1x4, 1x6, 1x8, 2x2, 2x3, 2x4, 2x6, 2x8, 2x10
+Plates: 1x1 plate, 1x2 plate, 1x4 plate, 1x6 plate, 1x8 plate, 2x2 plate, 2x4 plate, 2x6 plate, 2x8 plate, 4x4 plate, 6x6 plate, 8x8 plate, 16x16 baseplate, 32x32 baseplate
+Slopes: 1x1 slope 30°, 1x2 slope 30°, 1x2 slope 45°, 2x2 slope 45°, 1x2 inverted slope, 2x2 inverted slope
+Tiles: 1x1 tile, 1x2 tile, 1x4 tile, 2x2 tile, 2x4 tile
+Special: 1x1 round brick, 1x1 round plate, 2x2 round brick, 1x2 jumper plate, 1x2x2 window frame, 1x4x3 window frame, 1x1x3 pillar, 2x2 corner brick
+
+VALID COLORS: Red, Blue, Yellow, Green, Orange, White, Black, Light Gray, Dark Gray, Brown, Dark Brown, Tan, Dark Tan, Sand Green, Sand Blue, Dark Blue, Dark Red, Lime Green, Dark Green, Medium Azure, Coral, Lavender, Dark Purple, Reddish Brown, Transparent Clear, Transparent Red, Transparent Blue, Transparent Yellow, Transparent Green`;
+
+  // ───────────────── PHASE 1 with validation retry ─────────────────
+  const phase1BaseSystemPrompt = `You are a LEGO set designer. Design a complete, finished LEGO model by laying out every piece at exact stud-grid coordinates.
+
+${REAL_LEGO_PARTS}
+
+COORDINATE SYSTEM:
+- Build sits on a baseplate. Front-left stud = column 1, row 1. Columns increase left→right (X). Rows increase front→back (Y). Layers increase bottom→up (Z). Layer 1 = first brick layer on top of baseplate.
+- A 2x4 brick placed horizontally at col 3, row 5, layer 1 occupies cols 3–6, rows 5–6 (colSpan=4, rowSpan=2).
+- A 2x4 brick placed VERTICALLY at col 3, row 5 occupies cols 3–4, rows 5–8 (colSpan=2, rowSpan=4).
+- Pieces MUST physically connect: every piece at layer N must overlap a piece at layer N-1 (or the baseplate). No floating pieces.
+
+CRITICAL — 3D DEPTH REQUIRED:
+- Use ≥ 6 distinct row values and ≥ 6 distinct col values (4 for vehicles/animals).
+- max(layer) ≥ 3.
+- A flat facade is WRONG.
+${structuralTemplate}
+
+PIECE SIZING:
+- colSpan = studs in column (X) direction. rowSpan = studs in row (Y) direction.
+- "2x4 Brick": first number = rows (2), second = columns (4). Horizontal: colSpan=4, rowSpan=2.
+- colSpan and rowSpan are integers ≥ 1.
+
+Style: ${stylePreset} — ${stylePalette}
+Difficulty: ${difficultyLevel} — ${difficultyHint}
+${pieceConstraint}
+${setConstraintPrompt}
+
+Return ONE JSON object describing the COMPLETE finished model. Every piece listed with exact position.`;
+
+  const phase1UserPrompt = `Design a complete LEGO model for: "${manual.title}"
+Description: ${manual.description}
+
+Return ONLY a JSON object with this structure:
+{
+  "modelDescription": "Brief description",
+  "hasBaseplate": true,
+  "baseplateSize": "16x16",
+  "estimatedPieceCount": 80,
+  "pieces": [
+    {"id": 1, "part": "2x4 Brick", "color": "Red", "col": 3, "row": 5, "layer": 1, "orientation": "horizontal", "colSpan": 4, "rowSpan": 2, "note": "south wall base"}
+  ],
+  "partsList": [{"part": "2x4 Brick", "color": "Red", "quantity": 4}]
+}
+
+orientation = "horizontal" if colSpan > rowSpan, "vertical" if rowSpan > colSpan, "horizontal" for square pieces.`;
+
+  let modelDesign: any = null;
+  let validationErrors: string[] = [];
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const sysPrompt = attempt === 0
+      ? phase1BaseSystemPrompt
+      : `${phase1BaseSystemPrompt}\n\nYOUR PREVIOUS DESIGN FAILED THESE CHECKS:\n${validationErrors.map((e) => `- ${e}`).join("\n")}\nFix every issue. Spread pieces across more rows/cols/layers and ensure each piece is supported.`;
+
+    modelDesign = await generateStructuredJson({
+      apiKey,
+      phaseName: `Phase 1${attempt > 0 ? " (retry)" : ""}`,
+      systemPrompt: sysPrompt,
+      userPrompt: phase1UserPrompt,
+      maxOutputTokens: 16384,
+    });
+
+    validationErrors = validateDesign(modelDesign, { isVehicle, isAnimal });
+    console.log(`Phase 1 attempt ${attempt + 1}: ${modelDesign?.pieces?.length || 0} pieces, ${validationErrors.length} validation errors`);
+    if (validationErrors.length === 0) break;
+  }
+
+  if (validationErrors.length > 0) {
+    throw new Error(`Phase 1 design failed validation after retry: ${validationErrors.slice(0, 3).join("; ")}`);
+  }
+
+  // ───────────────── PHASE 2: slim payload ─────────────────
+  const aiDecides = manual.page_count === 0;
+  const stepCountInstruction = aiDecides
+    ? "Generate as many steps as needed — typically 1–2 pieces per step."
+    : `Generate exactly ${manual.page_count} steps total.`;
+
+  // Only send minimal piece info to Phase 2
+  const slimPieces = modelDesign.pieces.map((p: any) => ({ id: p.id, part: p.part, color: p.color, layer: p.layer }));
+
+  const phase2SystemPrompt = `You write LEGO instruction manual steps. You receive a list of pieces (id, part, color, layer) and must order them into build steps.
+
+ORDERING RULES:
+- Baseplate first (if any), then layer 1, layer 2, ..., topmost layer last.
+- Within a layer, group nearby/related pieces together.
+- ${stepCountInstruction}
+- Beginner = 1–2 pieces per step. Intermediate = 1–3. Advanced = 2–4.
+- Group consecutive steps into named sections ("Base Layer", "Walls", "Roof", "Details").
+
+Reference pieces by id only. Do NOT echo positions — the renderer already has them.`;
+
+  const phase2UserPrompt = `Model "${manual.title}" — ${modelDesign.pieces.length} pieces:
+${JSON.stringify(slimPieces)}
+
+Return ONLY this JSON (no finishedModel, no partsList — those are added server-side):
+{
+  "difficulty": "${difficultyLevel}",
+  "style": "${stylePreset}",
+  "sections": [
+    {
+      "sectionTitle": "Base Layer",
+      "pages": [
+        {
+          "pageNumber": 1,
+          "title": "Step title",
+          "instructions": "What the builder does this step",
+          "pieceIds": [1, 2],
+          "tip": "Optional"
+        }
+      ]
+    }
+  ]
+}`;
+
+  const phase2Raw: any = await generateStructuredJson({
+    apiKey,
+    phaseName: "Phase 2",
+    systemPrompt: phase2SystemPrompt,
+    userPrompt: phase2UserPrompt,
+    maxOutputTokens: 16384,
+  });
+
+  if (!phase2Raw?.sections?.length) throw new Error("Phase 2 returned no sections");
+
+  // Reattach finishedModel + partsList server-side, plus per-page partsNeeded from pieceIds
+  const pieceById = new Map<number, any>(modelDesign.pieces.map((p: any) => [p.id, p]));
+  for (const section of phase2Raw.sections) {
+    for (const page of section.pages || []) {
+      const ids: number[] = Array.isArray(page.pieceIds) ? page.pieceIds : [];
+      const tally = new Map<string, { part: string; color: string; quantity: number }>();
+      for (const id of ids) {
+        const p = pieceById.get(id);
+        if (!p) continue;
+        const key = `${p.part}|${p.color}`;
+        const existing = tally.get(key);
+        if (existing) existing.quantity += 1;
+        else tally.set(key, { part: p.part, color: p.color, quantity: 1 });
+      }
+      page.partsNeeded = Array.from(tally.values());
+    }
+  }
+
+  const content: any = {
+    ...phase2Raw,
+    estimatedPieceCount: modelDesign.estimatedPieceCount || modelDesign.pieces.length,
+    hasBaseplate: modelDesign.hasBaseplate,
+    finishedModel: modelDesign.pieces,
+    partsList: modelDesign.partsList || [],
+  };
+
+  console.log(`Phase 2 complete: ${content.sections.length} sections`);
+
+  // ───────────────── Image rendering (parallel) ─────────────────
+  const allPages: any[] = (content.sections?.flatMap((s: any) => s.pages) || [])
+    .sort((a: any, b: any) => a.pageNumber - b.pageNumber);
+
+  const finishedPieces: any[] = content.finishedModel || modelDesign.pieces || [];
+
+  // Cumulative placed-ids per step
+  const placedIdsByStep: number[][] = [];
+  let running: number[] = [];
+  for (const page of allPages) {
+    const ids: number[] = Array.isArray(page.pieceIds) ? page.pieceIds : [];
+    running = [...running, ...ids];
+    placedIdsByStep.push([...running]);
+  }
+
+  const uploadTasks = allPages.map((page, i) => async () => {
+    const newPieceIds: number[] = Array.isArray(page.pieceIds) ? page.pieceIds : [];
+    const placedIds = placedIdsByStep[i] || [];
+    const placedPieces = finishedPieces.filter((p: any) => placedIds.includes(p.id));
+
+    const svgString = renderStepSVG({
+      placedPieces,
+      newPieceIds,
+      hasBaseplate: modelDesign.hasBaseplate,
+      baseplateSize: modelDesign.baseplateSize,
+      stepNumber: page.pageNumber,
+      stepTitle: page.title,
+    });
+
+    const svgBytes = new TextEncoder().encode(svgString);
+    const filePath = `${manualId}/step-${page.pageNumber}.svg`;
+    const { error: uploadErr } = await supabase.storage
+      .from("manual-images")
+      .upload(filePath, svgBytes, { contentType: "image/svg+xml", upsert: true });
+
+    if (uploadErr) {
+      console.error(`SVG upload failed for step ${page.pageNumber}:`, uploadErr);
+      return;
+    }
+    const { data: urlData } = supabase.storage.from("manual-images").getPublicUrl(filePath);
+    if (urlData?.publicUrl) page.imageUrl = urlData.publicUrl;
+  });
+
+  await runWithConcurrency(uploadTasks, 8);
+  console.log(`Rendered ${allPages.length} step images`);
+
+  await supabase
+    .from("manuals")
+    .update({ content, status: "completed" })
+    .eq("id", manualId);
+
+  // Best-effort usage increment
+  try {
+    await supabase.rpc("increment_pages_used", {
+      p_user_id: manual.user_id,
+      p_pages: manual.page_count,
+    });
+  } catch (_) { /* ignore */ }
+}
+
 serve(async (req) => {
   if (req.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
@@ -452,6 +866,8 @@ serve(async (req) => {
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "",
     { auth: { persistSession: false } }
   );
+
+  let manualIdForFailure: string | null = null;
 
   try {
     const authHeader = req.headers.get("Authorization");
@@ -463,6 +879,7 @@ serve(async (req) => {
 
     const { manualId, difficulty, pieceTarget, style, selectedSets, allowExtras } = await req.json();
     if (!manualId) throw new Error("manualId is required");
+    manualIdForFailure = manualId;
 
     const { data: manual, error: manualError } = await supabase
       .from("manuals")
@@ -478,369 +895,46 @@ serve(async (req) => {
     const GOOGLE_AI_API_KEY = Deno.env.get("GOOGLE_AI_API_KEY");
     if (!GOOGLE_AI_API_KEY) throw new Error("GOOGLE_AI_API_KEY not configured");
 
-    const difficultyLevel = difficulty || "Beginner";
-    const stylePreset = style || "classic";
-    const pieceConstraint = pieceTarget ? `\nIMPORTANT: The total build should use approximately ${pieceTarget} pieces or fewer. Keep the parts list realistic and shoppable.` : "";
-
-    // LEGO set constraint
-    const legoSetNames: Record<string, string> = {
-      "10698": "Classic Large Creative Brick Box (10698)", "11717": "Bricks Bricks Plates (11717)",
-      "10696": "Medium Creative Brick Box (10696)", "11013": "Creative Transparent Bricks (11013)",
-      "11014": "Bricks and Wheels (11014)", "11030": "Lots of Bricks (11030)",
-      "31058": "Creator Mighty Dinosaurs (31058)", "31109": "Creator Pirate Ship (31109)",
-      "31120": "Creator Medieval Castle (31120)", "31139": "Creator Cozy House (31139)",
-      "31145": "Creator Red Dragon (31145)", "31150": "Creator Wild Safari Animals (31150)",
-      "31152": "Creator Space Astronaut (31152)", "31153": "Creator Modern House (31153)",
-      "42151": "Technic Bugatti Bolide (42151)", "42115": "Technic Lamborghini Sián (42115)",
-      "60349": "City Lunar Space Station (60349)", "60337": "City Express Passenger Train (60337)",
-      "21054": "Architecture The White House (21054)", "21060": "Architecture Himeji Castle (21060)",
-      "75192": "Star Wars Millennium Falcon (75192)", "75375": "Star Wars Millennium Falcon 2024 (75375)",
-    };
-
-    let setConstraintPrompt = "";
-    if (selectedSets && selectedSets.length > 0) {
-      const setDescriptions = selectedSets.map((id: string) => legoSetNames[id] || `LEGO Set ${id}`).join(", ");
-      if (allowExtras) {
-        setConstraintPrompt = `\n\nLEGO SET CONSTRAINT: The user owns these LEGO sets: ${setDescriptions}. 
-PREFER pieces from these sets. If a piece is NOT available in any of the selected sets, you MAY still use it but you MUST mark it as an extra piece. 
-For each extra piece, add a field "isExtra": true and "sourceNote": "Not in selected sets — available in [suggest a real LEGO set where this piece can be found]" to the partsNeeded entry.
-Do NOT suggest pieces that don't exist in any real LEGO set.`;
-      } else {
-        setConstraintPrompt = `\n\nLEGO SET CONSTRAINT (STRICT): The user owns these LEGO sets: ${setDescriptions}.
-ONLY use pieces that are actually found in these sets. Do NOT use any piece that is not included in one of these sets.
-If you cannot complete the build with only these pieces, simplify the design to work within the available pieces.
-Every piece in partsNeeded must exist in at least one of the selected sets.`;
-      }
-    }
-
-    const styleDescriptions: Record<string, string> = {
-      classic: "Traditional LEGO style with bright primary colors",
-      retro: "Vintage/retro aesthetic with muted tones and nostalgic feel",
-      futuristic: "Sleek sci-fi design with metallic and neon accents",
-      minimalist: "Clean and simple design using minimal pieces and colors",
-      detailed: "Highly detailed and intricate design with lots of fine details",
-      whimsical: "Playful and imaginative design with unexpected elements",
-    };
-
-    // ─────────────────────────────────────────────────────────────────
-    // PHASE 1: Design the complete finished model
-    // The AI lays out every piece at exact grid coordinates BEFORE
-    // deciding how to split things into steps. This guarantees the
-    // final model is physically valid and all piece positions are known.
-    // ─────────────────────────────────────────────────────────────────
-
-    const REAL_LEGO_PARTS = `VALID LEGO PIECE CATALOG (only use pieces from this list):
-Bricks: 1x1, 1x2, 1x3, 1x4, 1x6, 1x8, 2x2, 2x3, 2x4, 2x6, 2x8, 2x10
-Plates: 1x1 plate, 1x2 plate, 1x4 plate, 1x6 plate, 1x8 plate, 2x2 plate, 2x4 plate, 2x6 plate, 2x8 plate, 4x4 plate, 6x6 plate, 8x8 plate, 16x16 baseplate, 32x32 baseplate
-Slopes: 1x1 slope 30°, 1x2 slope 30°, 1x2 slope 45°, 2x2 slope 45°, 1x2 inverted slope, 2x2 inverted slope
-Tiles: 1x1 tile, 1x2 tile, 1x4 tile, 2x2 tile, 2x4 tile
-Special: 1x1 round brick, 1x1 round plate, 2x2 round brick, 1x2 jumper plate, 1x2x2 window frame, 1x4x3 window frame, 1x1x3 pillar, 2x2 corner brick
-
-VALID COLORS: Red, Blue, Yellow, Green, Orange, White, Black, Light Gray, Dark Gray, Brown, Dark Brown, Tan, Dark Tan, Sand Green, Sand Blue, Dark Blue, Dark Red, Lime Green, Dark Green, Medium Azure, Coral, Lavender, Dark Purple, Reddish Brown, Transparent Clear, Transparent Red, Transparent Blue, Transparent Yellow, Transparent Green`;
-
-    // ── Structural template: injected for known enclosed-structure builds ──
-    const titleLower = (manual.title || "").toLowerCase();
-    const isEnclosedStructure = /house|home|building|tower|castle|store|shop|barn|cabin|church|school|office|hotel|warehouse/.test(titleLower);
-    const isVehicle = /car|truck|train|plane|ship|boat|rocket|bus|tank/.test(titleLower);
-    const isAnimal = /dog|cat|horse|dragon|bird|fish|lion|bear|elephant/.test(titleLower);
-
-    let structuralTemplate = "";
-    if (isEnclosedStructure) {
-      structuralTemplate = `
-STRUCTURAL TEMPLATE — ENCLOSED BUILDING:
-You are designing a 3D enclosed structure. It MUST have all four walls AND a roof.
-Use this exact footprint pattern on a 16x16 baseplate:
-  • Back wall:      row 4,  cols 4–13, layers 1 to N   (2 studs deep, rowSpan=2)
-  • Front wall:     row 12, cols 4–13, layers 1 to N   (2 studs deep, rowSpan=2)
-  • Left side wall: col 4,  rows 4–13, layers 1 to N   (2 studs wide, colSpan=2)
-  • Right side wall:col 12, rows 4–13, layers 1 to N   (2 studs wide, colSpan=2)
-  • Door gap:       front wall cols 8–9 at layer 1 only (leave gap or use white/tan brick)
-  • Roof:           spans full footprint at layer N+1
-The build MUST span rows 4 through 13 (at least 8 distinct row values used).
-The build MUST span cols 4 through 13 (at least 8 distinct col values used).
-A two-story house needs layers 1–5 minimum. A tower needs 6+ layers.
-DO NOT place all pieces at the same row. A flat facade is NOT valid.`;
-    } else if (isVehicle) {
-      structuralTemplate = `
-STRUCTURAL TEMPLATE — VEHICLE:
-Design a 3D vehicle body. It must have length (col span ≥ 8), width (row span ≥ 4), and height (layers ≥ 3).
-Centre the vehicle on the baseplate. Use dark colors for wheels/tyres, bright for body.`;
-    } else if (isAnimal) {
-      structuralTemplate = `
-STRUCTURAL TEMPLATE — ANIMAL:
-Design a 3D animal using a mosaic/sculpted approach. The body should span at least 6 cols × 4 rows × 3 layers.
-Use tan/brown for body, darker for features. Legs at corners, head projecting forward.`;
-    }
-
-    const phase1SystemPrompt = `You are a LEGO set designer. Your job is to design a complete, finished LEGO model by laying out every single piece at exact stud-grid coordinates.
-
-${REAL_LEGO_PARTS}
-
-COORDINATE SYSTEM:
-- The build sits on a baseplate. Front-left stud = column 1, row 1. Columns increase left→right (X). Rows increase front→back (Y). Layers increase bottom→up (Z). Layer 1 = first brick layer on top of baseplate surface.
-- A 2x4 brick placed horizontally at col 3, row 5, layer 1 occupies cols 3–6, rows 5–6 (colSpan=4, rowSpan=2).
-- A 2x4 brick placed VERTICALLY at col 3, row 5, layer 1 occupies cols 3–4, rows 5–8 (colSpan=2, rowSpan=4).
-- A 1x2 plate placed horizontally: colSpan=2, rowSpan=1. Placed vertically: colSpan=1, rowSpan=2.
-- Pieces MUST physically connect: every piece at layer N must sit on a piece at layer N-1 (or baseplate at layer 0). No floating pieces.
-
-CRITICAL — 3D DEPTH REQUIRED:
-- The build MUST use at least 6 distinct row values. Do NOT place all pieces at the same row.
-- The build MUST use at least 6 distinct col values.
-- A flat facade (all pieces at row 6–7) is WRONG and invalid.
-- Use the full grid: centre a 10-stud-wide shape around cols 3–12 on a 16×16 base.
-${structuralTemplate}
-
-PIECE SIZING — CRITICAL:
-- colSpan = number of studs in the column (left-right) direction.
-- rowSpan = number of studs in the row (front-back) direction.
-- A "2x4 Brick": the first number is rows (2), second is columns (4). Horizontal: colSpan=4, rowSpan=2.
-- NEVER set colSpan or rowSpan to 0. Minimum is 1.
-
-SELF-CHECK — before returning JSON, verify:
-1. Are there pieces at 6+ distinct row values? If not, redesign with proper depth.
-2. Are there pieces at 6+ distinct col values? If not, widen the build.
-3. Is max(layer) >= 3? If not, add more height.
-4. Does every piece at layer N have support at layer N-1 or the baseplate? Fix any floaters.
-
-Style: ${styleDescriptions[stylePreset] || styleDescriptions.classic}
-Difficulty: ${difficultyLevel}
-${pieceConstraint}
-${setConstraintPrompt}
-
-Return a JSON object describing the COMPLETE finished model. Every piece must be listed with exact position.`;
-
-    const phase1UserPrompt = `Design a complete LEGO model for: "${manual.title}"
-Description: ${manual.description}
-
-Return ONLY a JSON object with this structure:
-{
-  "modelDescription": "Brief description of the finished model",
-  "hasBaseplate": true or false,
-  "baseplateSize": "16x16" or "32x32" or null,
-  "estimatedPieceCount": <number>,
-  "pieces": [
-    {
-      "id": 1,
-      "part": "2x4 Brick",
-      "color": "Red",
-      "col": 3,
-      "row": 5,
-      "layer": 1,
-      "orientation": "horizontal",
-      "colSpan": 4,
-      "rowSpan": 2,
-      "note": "optional context like 'south wall base'"
-    }
-  ],
-  "partsList": [
-    {"part": "2x4 Brick", "color": "Red", "quantity": 4}
-  ]
-}
-
-Orientation must be "horizontal" (long axis runs left-right, colSpan > rowSpan) or "vertical" (long axis runs front-back, rowSpan > colSpan). For square pieces (1x1, 2x2 etc) use "horizontal".
-Think carefully about the physical structure. No piece may float.`;
-
-    let modelDesign: any;
-    try {
-      modelDesign = await generateStructuredJson({
-        apiKey: GOOGLE_AI_API_KEY,
-        phaseName: "Phase 1",
-        systemPrompt: phase1SystemPrompt,
-        userPrompt: phase1UserPrompt,
-        maxOutputTokens: 16384,
-      });
-    } catch (error) {
-      if (error instanceof GeminiApiError) {
-        if (error.status === 429) {
-          await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
-          return new Response(JSON.stringify({ error: "Rate limit exceeded. Please try again later." }), {
-            status: 429,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        if (error.status === 402) {
-          await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
-          return new Response(JSON.stringify({ error: "AI credits exhausted. Please add credits." }), {
-            status: 402,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-
-        if (error.status === 503) {
-          await supabase.from("manuals").update({ status: "failed" }).eq("id", manualId);
-          return new Response(JSON.stringify({ error: "AI service is temporarily busy. Please try again in a moment." }), {
-            status: 503,
-            headers: { ...corsHeaders, "Content-Type": "application/json" },
-          });
-        }
-      }
-
-      throw error;
-    }
-    if (!modelDesign?.pieces?.length) throw new Error("Phase 1 returned no pieces");
-
-    console.log(`Phase 1 complete: ${modelDesign.pieces.length} pieces designed`);
-
-    // ─────────────────────────────────────────────────────────────────
-    // PHASE 2: Decompose the finished model into ordered build steps
-    // The AI knows exactly what the final model looks like and works
-    // backwards to create a logical, layer-by-layer build sequence.
-    // ─────────────────────────────────────────────────────────────────
-
-    const aiDecides = manual.page_count === 0;
-    const stepCountInstruction = aiDecides
-      ? "Generate as many steps as needed — typically one step per 1-2 pieces."
-      : `Generate exactly ${manual.page_count} steps total.`;
-
-    const phase2SystemPrompt = `You are a LEGO instruction manual writer. You have been given a complete, finished model design with every piece at exact coordinates. Your job is to decompose it into a logical step-by-step build sequence.
-
-RULES FOR STEP ORDERING:
-- Always start with the baseplate (if present), then layer 1 pieces (bottom-most), then layer 2, etc.
-- Within each layer, work from back-left to front-right so earlier pieces support later ones.
-- Never introduce a piece that would require moving or lifting a piece placed in an earlier step.
-- Each step = 1 to 2 pieces maximum for Beginner, 1 to 3 for Intermediate/Advanced.
-- ${stepCountInstruction}
-- Group steps into named sections (e.g., "Base Layer", "Walls", "Roof", "Details").
-
-INSTRUCTION WRITING RULES:
-- Reference pieces by their ID from the model design (e.g., "piece #12").
-- Describe placement using the exact col/row/layer from the model design.
-- Use language like: "Place a Red 2x4 Brick horizontally at row 5, columns 3–6, layer 1, directly on the baseplate."
-- If placing on top of another piece: "Place on top of piece #5 (the Blue 2x4 Brick at row 3, columns 1–4)."
-- Never use vague terms like "to the left" without a coordinate. Always give the exact position.`;
-
-    const phase2UserPrompt = `Here is the complete finished model for "${manual.title}":
-
-${JSON.stringify(modelDesign, null, 2)}
-
-Decompose this into step-by-step build instructions. Return ONLY a JSON object with this structure:
-{
-  "difficulty": "${difficultyLevel}",
-  "style": "${stylePreset}",
-  "estimatedPieceCount": ${modelDesign.estimatedPieceCount || modelDesign.pieces.length},
-  "hasBaseplate": ${modelDesign.hasBaseplate},
-  "finishedModel": ${JSON.stringify(modelDesign.pieces)},
-  "sections": [
-    {
-      "sectionTitle": "Base Layer",
-      "pages": [
-        {
-          "pageNumber": 1,
-          "title": "Step title",
-          "instructions": "Exact placement instructions referencing col/row/layer",
-          "pieceIds": [1, 2],
-          "partsNeeded": [{"part": "2x4 Brick", "color": "Red", "quantity": 1}],
-          "tip": "Optional tip"
-        }
-      ]
-    }
-  ],
-  "partsList": ${JSON.stringify(modelDesign.partsList)}
-}`;
-
-    let content: any;
-    try {
-      content = await generateStructuredJson({
-        apiKey: GOOGLE_AI_API_KEY,
-        phaseName: "Phase 2",
-        systemPrompt: phase2SystemPrompt,
-        userPrompt: phase2UserPrompt,
-        maxOutputTokens: 16384,
-      });
-    } catch (error) {
-      if (error instanceof GeminiApiError) {
-        console.error("Phase 2 AI error details:", error.status, error.details.slice(0, 800));
-      }
-      throw error;
-    }
-    if (!content?.sections?.length) throw new Error("Phase 2 returned no sections");
-
-    console.log(`Phase 2 complete: steps generated across ${content.sections.length} sections`);
-
-    // Flatten all pages and sort by pageNumber
-    const allPages = (content.sections?.flatMap((s: any) => s.pages) || [])
-      .sort((a: any, b: any) => a.pageNumber - b.pageNumber);
-
-    // The finished model pieces — used to render each step image
-    const finishedPieces: any[] = content.finishedModel || modelDesign.pieces || [];
-
-    console.log(`Generating images for ${allPages.length} steps...`);
-
-    // Build a lookup of which piece IDs have been placed after each step
-    // so the image prompt knows exactly what to draw
-    const placedPieceIdsByStep: number[][] = [];
-    let runningIds: number[] = [];
-    for (const page of allPages) {
-      const ids: number[] = Array.isArray(page.pieceIds) ? page.pieceIds : [];
-      runningIds = [...runningIds, ...ids];
-      placedPieceIdsByStep.push([...runningIds]);
-    }
-
-    for (let i = 0; i < allPages.length; i++) {
-      const page = allPages[i];
+    // Background job — return 202 immediately so the client doesn't time out.
+    const job = (async () => {
       try {
-        // Pieces placed in THIS step
-        const newPieceIds: number[] = Array.isArray(page.pieceIds) ? page.pieceIds : [];
-        const newPieces = finishedPieces.filter((p: any) => newPieceIds.includes(p.id));
-
-        // All pieces placed so far (including this step)
-        const placedIds = placedPieceIdsByStep[i] || [];
-        const placedPieces = finishedPieces.filter((p: any) => placedIds.includes(p.id));
-
-        // Render deterministically — no AI involved
-        const svgString = renderStepSVG({
-          placedPieces,
-          newPieceIds,
-          hasBaseplate: modelDesign.hasBaseplate,
-          baseplateSize: modelDesign.baseplateSize,
-          stepNumber: page.pageNumber,
-          stepTitle: page.title,
+        await runPipeline({
+          supabase,
+          manualId,
+          manual,
+          difficulty,
+          pieceTarget,
+          style,
+          selectedSets,
+          allowExtras,
+          apiKey: GOOGLE_AI_API_KEY,
         });
-
-        // Upload SVG to storage
-        const svgBytes = new TextEncoder().encode(svgString);
-        const filePath = `${manualId}/step-${page.pageNumber}.svg`;
-        const { error: uploadErr } = await supabase.storage
-          .from("manual-images")
-          .upload(filePath, svgBytes, { contentType: "image/svg+xml", upsert: true });
-
-        if (!uploadErr) {
-          const { data: urlData } = supabase.storage.from("manual-images").getPublicUrl(filePath);
-          if (urlData?.publicUrl) {
-            page.imageUrl = urlData.publicUrl;
-            console.log(`SVG rendered for step ${page.pageNumber}`);
-          }
-        } else {
-          console.error(`SVG upload failed for step ${page.pageNumber}:`, uploadErr);
-        }
-      } catch (imgError) {
-        console.error(`Image generation failed for step ${page.pageNumber}:`, imgError);
+      } catch (err) {
+        const message = err instanceof GeminiApiError
+          ? `${err.message} (status ${err.status})`
+          : err instanceof Error
+            ? err.message
+            : "Unknown error";
+        console.error("Pipeline failure:", message);
+        await markFailed(supabase, manualId, message);
       }
+    })();
+
+    // @ts-ignore — EdgeRuntime is available in Supabase edge functions
+    if (typeof EdgeRuntime !== "undefined" && EdgeRuntime?.waitUntil) {
+      // @ts-ignore
+      EdgeRuntime.waitUntil(job);
     }
 
-    await supabase
-      .from("manuals")
-      .update({ content, status: "completed" })
-      .eq("id", manualId);
-
-    // Update pages used (best effort)
-    try {
-      const { error: rpcError } = await supabase.rpc("increment_pages_used", {
-        p_user_id: userData.user.id,
-        p_pages: manual.page_count,
-      });
-      if (rpcError) console.log("increment_pages_used RPC not available:", rpcError.message);
-    } catch {
-      console.log("increment_pages_used RPC not available");
-    }
-
-    return new Response(JSON.stringify({ success: true, content }), {
+    return new Response(JSON.stringify({ accepted: true, manualId }), {
+      status: 202,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (error) {
-    console.error("generate-manual error:", error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : "Unknown error" }), {
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("generate-manual handler error:", message);
+    if (manualIdForFailure) await markFailed(supabase, manualIdForFailure, message);
+    return new Response(JSON.stringify({ error: message }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });

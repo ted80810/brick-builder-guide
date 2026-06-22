@@ -68,6 +68,9 @@ const ManualView = () => {
   const { toast } = useToast();
 
   useEffect(() => {
+    let cancelled = false;
+    let pollTimer: any = null;
+
     const fetchManual = async () => {
       if (!id) return;
       const { data, error } = await supabase
@@ -76,17 +79,26 @@ const ManualView = () => {
         .eq("id", id)
         .maybeSingle();
 
+      if (cancelled) return;
       if (error) console.error("Error fetching manual:", error);
-      setManual(data as unknown as Manual | null);
+      const m = data as unknown as Manual | null;
+      setManual(m);
 
-      // Check ownership
       const { data: { user } } = await supabase.auth.getUser();
-      if (user && data && (data as any).user_id === user.id) {
-        setIsOwner(true);
-      }
+      if (user && m && m.user_id === user.id) setIsOwner(true);
       setLoading(false);
+
+      // Poll while still generating
+      if (m && (m.status === "generating" || m.status === "pending")) {
+        pollTimer = setTimeout(fetchManual, 3000);
+      }
     };
     fetchManual();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, [id]);
 
   const handleRegenerateImage = async (pageNumber: number) => {
@@ -371,6 +383,41 @@ const ManualView = () => {
   const allPages = getAllPages();
   const sections = manual.content?.sections;
   const partsList = manual.content?.partsList || [];
+  const isGenerating = manual.status === "generating" || manual.status === "pending";
+  const isFailed = manual.status === "failed";
+  const errorMessage = (manual.content as any)?.error as string | undefined;
+
+  if (isGenerating || isFailed) {
+    return (
+      <div className="min-h-screen bg-background flex flex-col">
+        <Navbar />
+        <main className="flex-1 flex items-center justify-center px-4">
+          <div className="max-w-md text-center bg-card rounded-2xl p-8 shadow-card">
+            <h1 className="text-2xl font-heading font-bold text-foreground mb-2">{manual.title}</h1>
+            <p className="text-sm text-muted-foreground mb-6">{manual.description}</p>
+            {isGenerating ? (
+              <>
+                <Loader2 className="w-10 h-10 animate-spin text-primary mx-auto mb-4" />
+                <p className="font-heading font-semibold text-foreground">Building your manual…</p>
+                <p className="text-sm text-muted-foreground mt-1">This usually takes 30–90 seconds. The page will refresh automatically.</p>
+              </>
+            ) : (
+              <>
+                <div className="text-4xl mb-2">⚠️</div>
+                <p className="font-heading font-semibold text-foreground mb-2">Generation failed</p>
+                <p className="text-sm text-muted-foreground mb-6">{errorMessage || "Something went wrong while generating this manual."}</p>
+                <div className="flex gap-2 justify-center">
+                  <Link to="/create"><Button>Try again</Button></Link>
+                  <Link to="/gallery"><Button variant="outline">Back to Gallery</Button></Link>
+                </div>
+              </>
+            )}
+          </div>
+        </main>
+        <Footer />
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-background flex flex-col">

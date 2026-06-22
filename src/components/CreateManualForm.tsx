@@ -121,8 +121,7 @@ const CreateManualForm = ({ loadedEntry, onEntryLoaded }: CreateManualFormProps)
         manual_id: manual.id,
       } as any);
 
-      toast({ title: "Manual generated!", description: "Your instruction manual is ready to view." });
-      navigate(`/manual/${manual.id}`);
+      toast({ title: "Generation started!", description: "Your manual is being built — this usually takes 30–90 seconds." });
     } catch (err: any) {
       console.error("Generation error:", err);
       toast({ title: "Generation failed", description: err.message || "Something went wrong", variant: "destructive" });

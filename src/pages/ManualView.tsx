@@ -68,6 +68,9 @@ const ManualView = () => {
   const { toast } = useToast();
 
   useEffect(() => {
+    let cancelled = false;
+    let pollTimer: any = null;
+
     const fetchManual = async () => {
       if (!id) return;
       const { data, error } = await supabase
@@ -76,17 +79,26 @@ const ManualView = () => {
         .eq("id", id)
         .maybeSingle();
 
+      if (cancelled) return;
       if (error) console.error("Error fetching manual:", error);
-      setManual(data as unknown as Manual | null);
+      const m = data as unknown as Manual | null;
+      setManual(m);
 
-      // Check ownership
       const { data: { user } } = await supabase.auth.getUser();
-      if (user && data && (data as any).user_id === user.id) {
-        setIsOwner(true);
-      }
+      if (user && m && m.user_id === user.id) setIsOwner(true);
       setLoading(false);
+
+      // Poll while still generating
+      if (m && (m.status === "generating" || m.status === "pending")) {
+        pollTimer = setTimeout(fetchManual, 3000);
+      }
     };
     fetchManual();
+
+    return () => {
+      cancelled = true;
+      if (pollTimer) clearTimeout(pollTimer);
+    };
   }, [id]);
 
   const handleRegenerateImage = async (pageNumber: number) => {

@@ -1,33 +1,36 @@
-## Forgot Password Flow
+## Plan to stop manual generation failures
 
-Adds standard email-based password reset to the existing auth page. Works for any account (including the admin test account).
+### Problem
+Recent generated manuals are failing in the backend with:
 
-### 1. Update `src/pages/Auth.tsx`
-- Add a third mode alongside Sign In / Sign Up: **Forgot password**.
-- Add a "Forgot password?" link under the password field on the Sign In view.
-- Forgot view: single email input + "Send reset link" button. On submit:
-  ```ts
-  await supabase.auth.resetPasswordForEmail(email, {
-    redirectTo: `${window.location.origin}/reset-password`,
-  });
-  ```
-- Show a toast: "Check your email for a reset link." Then return to Sign In view.
+`Phase 1 design failed validation after retry: piece(s) float without support from the layer below.`
 
-### 2. New page `src/pages/ResetPassword.tsx`
-- Public route. Detects the Supabase recovery session (Supabase auto-consumes the `#access_token&type=recovery` hash via the existing `onAuthStateChange` listener).
-- Shows a "Set new password" form (new password + confirm). On submit:
-  ```ts
-  await supabase.auth.updateUser({ password });
-  ```
-- On success: toast + redirect to `/`.
-- If no recovery session is detected, show a "Link expired or invalid — request a new one" state with a link back to `/auth`.
+The generation is working far enough to produce a model, but the strict support validator rejects the whole manual when a few decorative/top pieces do not perfectly overlap the layer immediately below.
 
-### 3. Wire route in `src/App.tsx`
-- Add `<Route path="/reset-password" element={<ResetPassword />} />` outside any auth guard.
+### Fix
+1. **Repair AI designs before failing**
+   - In `supabase/functions/generate-manual/index.ts`, add a normalization/repair pass after Phase 1 generation.
+   - If a piece is unsupported, automatically move it down to the nearest supported layer where it overlaps another piece.
+   - Keep coordinates, colors, part names, and the visual model intact as much as possible.
 
-### Email delivery
-Uses Lovable's default auth emails out of the box — no domain or template setup required. Branded templates can be added later via Cloud → Emails if desired.
+2. **Relax the final validation path**
+   - Keep meaningful checks for missing pieces, bad coordinates, too-flat builds, and empty designs.
+   - Treat small support issues as repairable instead of fatal.
+   - Only fail if the design is fundamentally unusable after repair.
 
-### Out of scope
-- No changes to the user_roles / admin logic — this is a standard reset usable by every account.
-- No custom-branded email templates in this pass.
+3. **Improve retry behavior**
+   - Increase Phase 1 attempts from 2 to 3.
+   - On retry, tell the AI exactly which structural issues remain.
+
+4. **Make failures clearer**
+   - Keep writing real failure messages into the manual record.
+   - Avoid leaving rows stuck in `generating`.
+
+5. **Deploy and verify**
+   - Deploy the updated `generate-manual` backend function.
+   - Check function logs after deploy to confirm the previous “float without support” failure path is no longer the likely outcome.
+
+### Technical notes
+- This changes only the manual generation backend logic.
+- No database schema changes are needed.
+- Existing failed rows will remain failed; creating a new manual should use the fixed generation flow.

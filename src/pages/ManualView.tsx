@@ -5,7 +5,8 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Download, ArrowLeft, Loader2, RefreshCw, Share2, Shuffle, Copy, Check, Pencil, Trash2, Plus, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Download, ArrowLeft, Loader2, RefreshCw, Share2, Shuffle, Copy, Check, Pencil, Trash2, Plus, X, Eye, ZoomIn, ZoomOut, Save } from "lucide-react";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 
@@ -65,7 +66,46 @@ const ManualView = () => {
   const [addPrompt, setAddPrompt] = useState("");
   const [stepActionLoading, setStepActionLoading] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
+  const [reviewMode, setReviewMode] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
+  const [lightbox, setLightbox] = useState<{ url: string; title: string } | null>(null);
+  const [zoom, setZoom] = useState(1);
   const { toast } = useToast();
+
+  const updatePageField = (pageNumber: number, field: "title" | "instructions" | "tip", value: string) => {
+    setManual(prev => {
+      if (!prev?.content) return prev;
+      const apply = (pages: ManualPage[]) =>
+        pages.map(p => p.pageNumber === pageNumber ? { ...p, [field]: value } : p);
+      if (prev.content.sections) {
+        return { ...prev, content: { ...prev.content, sections: prev.content.sections.map(s => ({ ...s, pages: apply(s.pages) })) } };
+      }
+      if (prev.content.pages) {
+        return { ...prev, content: { ...prev.content, pages: apply(prev.content.pages) } };
+      }
+      return prev;
+    });
+    setDirty(true);
+  };
+
+  const handleSaveReview = async () => {
+    if (!manual?.content) return;
+    setSavingReview(true);
+    try {
+      const { error } = await supabase
+        .from("manuals")
+        .update({ content: manual.content as any, title: manual.title, description: manual.description })
+        .eq("id", manual.id);
+      if (error) throw error;
+      setDirty(false);
+      toast({ title: "Saved", description: "Your edits have been saved. Download the PDF to get the updated version." });
+    } catch (err: any) {
+      toast({ title: "Save failed", description: err.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setSavingReview(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -443,6 +483,23 @@ const ManualView = () => {
                 {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
                 {copied ? "Copied!" : "Share"}
               </Button>
+              {isOwner && manual.status === "completed" && (
+                <Button
+                  variant={reviewMode ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setReviewMode(v => !v)}
+                  className="gap-1"
+                >
+                  <Eye className="w-4 h-4" />
+                  {reviewMode ? "Exit Review" : "Review Mode"}
+                </Button>
+              )}
+              {isOwner && reviewMode && dirty && (
+                <Button size="sm" onClick={handleSaveReview} disabled={savingReview} className="gap-1">
+                  {savingReview ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save
+                </Button>
+              )}
               {manual.status === "completed" && allPages.length > 0 && (
                 <Button size="sm" onClick={handleDownloadPDF} className="gap-1">
                   <Download className="w-4 h-4" />
@@ -454,10 +511,27 @@ const ManualView = () => {
 
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
             {/* Cover / header */}
-            <h1 className="text-3xl md:text-4xl font-heading font-bold text-foreground mb-2">
-              {manual.title}
-            </h1>
-            <p className="text-muted-foreground mb-4">{manual.description}</p>
+            {reviewMode && isOwner ? (
+              <div className="space-y-2 mb-4">
+                <Input
+                  value={manual.title}
+                  onChange={(e) => { setManual(prev => prev ? { ...prev, title: e.target.value } : prev); setDirty(true); }}
+                  className="text-2xl md:text-3xl font-heading font-bold h-auto py-2"
+                />
+                <Textarea
+                  value={manual.description}
+                  onChange={(e) => { setManual(prev => prev ? { ...prev, description: e.target.value } : prev); setDirty(true); }}
+                  rows={2}
+                />
+              </div>
+            ) : (
+              <>
+                <h1 className="text-3xl md:text-4xl font-heading font-bold text-foreground mb-2">
+                  {manual.title}
+                </h1>
+                <p className="text-muted-foreground mb-4">{manual.description}</p>
+              </>
+            )}
 
             {/* Meta badges */}
             {manual.content && (
@@ -582,6 +656,40 @@ const ManualView = () => {
           </motion.div>
         </div>
       </main>
+
+      {/* Image lightbox / zoom viewer */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <div className="absolute top-4 left-4 right-4 flex items-center justify-between text-white z-10" onClick={(e) => e.stopPropagation()}>
+            <p className="font-heading font-semibold truncate">{lightbox.title}</p>
+            <div className="flex items-center gap-2">
+              <Button size="icon" variant="secondary" onClick={() => setZoom(z => Math.max(0.5, z - 0.25))} title="Zoom out">
+                <ZoomOut className="w-4 h-4" />
+              </Button>
+              <span className="text-sm tabular-nums w-12 text-center">{Math.round(zoom * 100)}%</span>
+              <Button size="icon" variant="secondary" onClick={() => setZoom(z => Math.min(5, z + 0.25))} title="Zoom in">
+                <ZoomIn className="w-4 h-4" />
+              </Button>
+              <Button size="icon" variant="secondary" onClick={() => setLightbox(null)} title="Close">
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+          <div className="w-full h-full overflow-auto flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={lightbox.url}
+              alt={lightbox.title}
+              style={{ transform: `scale(${zoom})`, transformOrigin: "center center", transition: "transform 0.15s ease-out" }}
+              className="max-w-full max-h-[85vh] object-contain select-none"
+              draggable={false}
+            />
+          </div>
+        </div>
+      )}
+
       <Footer />
     </div>
   );
@@ -647,7 +755,15 @@ const ManualView = () => {
               {page.pageNumber}
             </span>
           </div>
-          <h3 className="font-heading font-bold text-xl text-foreground flex-1">{page.title}</h3>
+          {reviewMode && isOwner ? (
+            <Input
+              value={page.title}
+              onChange={(e) => updatePageField(page.pageNumber, "title", e.target.value)}
+              className="flex-1 font-heading font-bold text-xl h-auto py-1"
+            />
+          ) : (
+            <h3 className="font-heading font-bold text-xl text-foreground flex-1">{page.title}</h3>
+          )}
 
           {/* Edit/Delete buttons for owners */}
           {isOwner && (
@@ -713,8 +829,9 @@ const ManualView = () => {
             <img
               src={page.imageUrl}
               alt={`Step ${page.pageNumber}: ${page.title}`}
-              className="w-full h-auto"
+              className="w-full h-auto cursor-zoom-in"
               loading="lazy"
+              onClick={() => { setZoom(1); setLightbox({ url: page.imageUrl!, title: `Step ${page.pageNumber}: ${page.title}` }); }}
             />
             <Button
               size="sm"
@@ -742,7 +859,16 @@ const ManualView = () => {
           </Button>
         )}
 
-        <p className="text-foreground leading-relaxed mb-4">{page.instructions}</p>
+        {reviewMode && isOwner ? (
+          <Textarea
+            value={page.instructions}
+            onChange={(e) => updatePageField(page.pageNumber, "instructions", e.target.value)}
+            rows={4}
+            className="mb-4"
+          />
+        ) : (
+          <p className="text-foreground leading-relaxed mb-4 whitespace-pre-wrap">{page.instructions}</p>
+        )}
 
         <div className="bg-muted rounded-xl p-4 mb-3">
           <h4 className="font-heading font-semibold text-sm text-foreground mb-2">🔧 Parts Needed:</h4>
@@ -751,11 +877,22 @@ const ManualView = () => {
           </ul>
         </div>
 
-        {page.tip && (
+        {reviewMode && isOwner ? (
+          <div className="bg-secondary/20 border-l-4 border-secondary rounded-r-xl p-3">
+            <label className="text-xs font-heading font-semibold text-foreground">💡 Tip (leave blank to remove)</label>
+            <Textarea
+              value={page.tip || ""}
+              onChange={(e) => updatePageField(page.pageNumber, "tip", e.target.value)}
+              rows={2}
+              className="mt-1 bg-background"
+              placeholder="Optional building tip..."
+            />
+          </div>
+        ) : page.tip ? (
           <div className="bg-secondary/20 border-l-4 border-secondary rounded-r-xl p-3">
             <p className="text-sm text-foreground">💡 <strong>Tip:</strong> {page.tip}</p>
           </div>
-        )}
+        ) : null}
       </motion.div>
     );
   }

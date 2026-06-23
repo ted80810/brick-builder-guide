@@ -484,14 +484,17 @@ function validateDesign(design: any, opts: { isVehicle: boolean; isAnimal: boole
   if (cols.size < minDistinct) errors.push(`Build spans only ${cols.size} distinct cols; need ≥ ${minDistinct}. Widen the build.`);
   if (maxLayer < 3) errors.push(`Build is only ${maxLayer} layer(s) tall; need ≥ 3. Add height.`);
 
-  // Floating pieces check — every layer-N piece needs layer-(N-1) overlap or baseplate
-  const hasBaseplate = !!design.hasBaseplate;
-  const byLayer = new Map<number, any[]>();
-  for (const p of pieces) {
-    const arr = byLayer.get(p.layer) || [];
-    arr.push(p);
-    byLayer.set(p.layer, arr);
-  }
+  // Floating pieces are auto-repaired before validation runs (see repairFloaters),
+  // so we don't fail the build for them here.
+  return errors;
+}
+
+// Move unsupported pieces down to the lowest layer where they overlap another
+// piece (or to layer 1). Returns how many were moved and how many remain unsupported.
+function repairFloaters(design: any): { moved: number; remaining: number } {
+  const pieces = Array.isArray(design?.pieces) ? design.pieces : [];
+  if (pieces.length === 0) return { moved: 0, remaining: 0 };
+
   function overlaps(a: any, b: any) {
     const ax1 = a.col, ax2 = a.col + (a.colSpan || 1);
     const ay1 = a.row, ay2 = a.row + (a.rowSpan || 1);
@@ -499,21 +502,37 @@ function validateDesign(design: any, opts: { isVehicle: boolean; isAnimal: boole
     const by1 = b.row, by2 = b.row + (b.rowSpan || 1);
     return ax1 < bx2 && bx1 < ax2 && ay1 < by2 && by1 < ay2;
   }
-  let floaters = 0;
-  for (const p of pieces) {
-    if (p.layer === 1) {
-      if (!hasBaseplate) {
-        // ok — sits on table
-      }
-      continue;
-    }
-    const below = byLayer.get((p.layer || 1) - 1) || [];
-    const supported = below.some((b) => overlaps(p, b));
-    if (!supported) floaters++;
-  }
-  if (floaters > 0) errors.push(`${floaters} piece(s) float without support from the layer below.`);
 
-  return errors;
+  pieces.sort((a: any, b: any) => (a.layer || 1) - (b.layer || 1));
+
+  let moved = 0;
+  let remaining = 0;
+  for (const p of pieces) {
+    const origLayer = p.layer || 1;
+    if (origLayer <= 1) continue;
+    const others = pieces.filter((q: any) => q !== p);
+    const below = others.filter((q: any) => (q.layer || 1) === origLayer - 1);
+    if (below.some((q: any) => overlaps(p, q))) continue;
+
+    let target = origLayer;
+    for (let L = origLayer - 1; L >= 2; L--) {
+      const supportLayer = others.filter((q: any) => (q.layer || 1) === L - 1);
+      if (supportLayer.some((q: any) => overlaps(p, q))) { target = L; break; }
+      if (L === 2) target = 1; // fall to baseplate
+    }
+    if (target === origLayer) {
+      // couldn't find support anywhere; drop to layer 1 (baseplate / table)
+      p.layer = 1;
+      moved++;
+    } else if (target !== origLayer) {
+      p.layer = target;
+      moved++;
+    } else {
+      remaining++;
+    }
+  }
+
+  return { moved, remaining };
 }
 
 // Simple concurrency limiter for image uploads

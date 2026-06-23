@@ -66,7 +66,46 @@ const ManualView = () => {
   const [addPrompt, setAddPrompt] = useState("");
   const [stepActionLoading, setStepActionLoading] = useState(false);
   const [isOwner, setIsOwner] = useState(false);
+  const [reviewMode, setReviewMode] = useState(false);
+  const [dirty, setDirty] = useState(false);
+  const [savingReview, setSavingReview] = useState(false);
+  const [lightbox, setLightbox] = useState<{ url: string; title: string } | null>(null);
+  const [zoom, setZoom] = useState(1);
   const { toast } = useToast();
+
+  const updatePageField = (pageNumber: number, field: "title" | "instructions" | "tip", value: string) => {
+    setManual(prev => {
+      if (!prev?.content) return prev;
+      const apply = (pages: ManualPage[]) =>
+        pages.map(p => p.pageNumber === pageNumber ? { ...p, [field]: value } : p);
+      if (prev.content.sections) {
+        return { ...prev, content: { ...prev.content, sections: prev.content.sections.map(s => ({ ...s, pages: apply(s.pages) })) } };
+      }
+      if (prev.content.pages) {
+        return { ...prev, content: { ...prev.content, pages: apply(prev.content.pages) } };
+      }
+      return prev;
+    });
+    setDirty(true);
+  };
+
+  const handleSaveReview = async () => {
+    if (!manual?.content) return;
+    setSavingReview(true);
+    try {
+      const { error } = await supabase
+        .from("manuals")
+        .update({ content: manual.content as any, title: manual.title, description: manual.description })
+        .eq("id", manual.id);
+      if (error) throw error;
+      setDirty(false);
+      toast({ title: "Saved", description: "Your edits have been saved. Download the PDF to get the updated version." });
+    } catch (err: any) {
+      toast({ title: "Save failed", description: err.message || "Please try again.", variant: "destructive" });
+    } finally {
+      setSavingReview(false);
+    }
+  };
 
   useEffect(() => {
     let cancelled = false;

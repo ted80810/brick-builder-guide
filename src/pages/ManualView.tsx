@@ -656,6 +656,40 @@ const ManualView = () => {
           </motion.div>
         </div>
       </main>
+
+      {/* Image lightbox / zoom viewer */}
+      {lightbox && (
+        <div
+          className="fixed inset-0 z-50 bg-black/90 flex flex-col items-center justify-center p-4"
+          onClick={() => setLightbox(null)}
+        >
+          <div className="absolute top-4 left-4 right-4 flex items-center justify-between text-white z-10" onClick={(e) => e.stopPropagation()}>
+            <p className="font-heading font-semibold truncate">{lightbox.title}</p>
+            <div className="flex items-center gap-2">
+              <Button size="icon" variant="secondary" onClick={() => setZoom(z => Math.max(0.5, z - 0.25))} title="Zoom out">
+                <ZoomOut className="w-4 h-4" />
+              </Button>
+              <span className="text-sm tabular-nums w-12 text-center">{Math.round(zoom * 100)}%</span>
+              <Button size="icon" variant="secondary" onClick={() => setZoom(z => Math.min(5, z + 0.25))} title="Zoom in">
+                <ZoomIn className="w-4 h-4" />
+              </Button>
+              <Button size="icon" variant="secondary" onClick={() => setLightbox(null)} title="Close">
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          </div>
+          <div className="w-full h-full overflow-auto flex items-center justify-center" onClick={(e) => e.stopPropagation()}>
+            <img
+              src={lightbox.url}
+              alt={lightbox.title}
+              style={{ transform: `scale(${zoom})`, transformOrigin: "center center", transition: "transform 0.15s ease-out" }}
+              className="max-w-full max-h-[85vh] object-contain select-none"
+              draggable={false}
+            />
+          </div>
+        </div>
+      )}
+
       <Footer />
     </div>
   );

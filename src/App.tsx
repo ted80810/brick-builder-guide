@@ -9,6 +9,7 @@ import Index from "./pages/Index";
 import Create from "./pages/Create";
 import Gallery from "./pages/Gallery";
 import Auth from "./pages/Auth";
+import ResetPassword from "./pages/ResetPassword";
 import ManualView from "./pages/ManualView";
 import MyManuals from "./pages/MyManuals";
 import NotFound from "./pages/NotFound";
@@ -28,6 +29,7 @@ const App = () => (
               <Route path="/create" element={<Create />} />
               <Route path="/gallery" element={<Gallery />} />
               <Route path="/auth" element={<Auth />} />
+              <Route path="/reset-password" element={<ResetPassword />} />
               <Route path="/manual/:id" element={<ManualView />} />
               <Route path="/my-manuals" element={<MyManuals />} />
               <Route path="*" element={<NotFound />} />

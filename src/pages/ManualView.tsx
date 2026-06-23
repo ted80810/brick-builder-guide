@@ -483,6 +483,23 @@ const ManualView = () => {
                 {copied ? <Check className="w-4 h-4" /> : <Share2 className="w-4 h-4" />}
                 {copied ? "Copied!" : "Share"}
               </Button>
+              {isOwner && manual.status === "completed" && (
+                <Button
+                  variant={reviewMode ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setReviewMode(v => !v)}
+                  className="gap-1"
+                >
+                  <Eye className="w-4 h-4" />
+                  {reviewMode ? "Exit Review" : "Review Mode"}
+                </Button>
+              )}
+              {isOwner && reviewMode && dirty && (
+                <Button size="sm" onClick={handleSaveReview} disabled={savingReview} className="gap-1">
+                  {savingReview ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
+                  Save
+                </Button>
+              )}
               {manual.status === "completed" && allPages.length > 0 && (
                 <Button size="sm" onClick={handleDownloadPDF} className="gap-1">
                   <Download className="w-4 h-4" />

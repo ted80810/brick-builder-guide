@@ -778,8 +778,9 @@ const ManualView = () => {
             <img
               src={page.imageUrl}
               alt={`Step ${page.pageNumber}: ${page.title}`}
-              className="w-full h-auto"
+              className="w-full h-auto cursor-zoom-in"
               loading="lazy"
+              onClick={() => { setZoom(1); setLightbox({ url: page.imageUrl!, title: `Step ${page.pageNumber}: ${page.title}` }); }}
             />
             <Button
               size="sm"

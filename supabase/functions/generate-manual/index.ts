@@ -714,18 +714,24 @@ orientation = "horizontal" if colSpan > rowSpan, "vertical" if rowSpan > colSpan
   let modelDesign: any = null;
   let validationErrors: string[] = [];
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const sysPrompt = attempt === 0
       ? phase1BaseSystemPrompt
       : `${phase1BaseSystemPrompt}\n\nYOUR PREVIOUS DESIGN FAILED THESE CHECKS:\n${validationErrors.map((e) => `- ${e}`).join("\n")}\nFix every issue. Spread pieces across more rows/cols/layers and ensure each piece is supported.`;
 
     modelDesign = await generateStructuredJson({
       apiKey,
-      phaseName: `Phase 1${attempt > 0 ? " (retry)" : ""}`,
+      phaseName: `Phase 1${attempt > 0 ? ` (retry ${attempt})` : ""}`,
       systemPrompt: sysPrompt,
       userPrompt: phase1UserPrompt,
       maxOutputTokens: 16384,
     });
+
+    // Auto-repair floating pieces before validating
+    const repair = repairFloaters(modelDesign);
+    if (repair.moved > 0) {
+      console.log(`Phase 1 attempt ${attempt + 1}: auto-repaired ${repair.moved} floating piece(s)`);
+    }
 
     validationErrors = validateDesign(modelDesign, { isVehicle, isAnimal });
     console.log(`Phase 1 attempt ${attempt + 1}: ${modelDesign?.pieces?.length || 0} pieces, ${validationErrors.length} validation errors`);

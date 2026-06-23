@@ -826,11 +826,22 @@ const ManualView = () => {
           </ul>
         </div>
 
-        {page.tip && (
+        {reviewMode && isOwner ? (
+          <div className="bg-secondary/20 border-l-4 border-secondary rounded-r-xl p-3">
+            <label className="text-xs font-heading font-semibold text-foreground">💡 Tip (leave blank to remove)</label>
+            <Textarea
+              value={page.tip || ""}
+              onChange={(e) => updatePageField(page.pageNumber, "tip", e.target.value)}
+              rows={2}
+              className="mt-1 bg-background"
+              placeholder="Optional building tip..."
+            />
+          </div>
+        ) : page.tip ? (
           <div className="bg-secondary/20 border-l-4 border-secondary rounded-r-xl p-3">
             <p className="text-sm text-foreground">💡 <strong>Tip:</strong> {page.tip}</p>
           </div>
-        )}
+        ) : null}
       </motion.div>
     );
   }

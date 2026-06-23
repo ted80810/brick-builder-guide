@@ -704,7 +704,15 @@ const ManualView = () => {
               {page.pageNumber}
             </span>
           </div>
-          <h3 className="font-heading font-bold text-xl text-foreground flex-1">{page.title}</h3>
+          {reviewMode && isOwner ? (
+            <Input
+              value={page.title}
+              onChange={(e) => updatePageField(page.pageNumber, "title", e.target.value)}
+              className="flex-1 font-heading font-bold text-xl h-auto py-1"
+            />
+          ) : (
+            <h3 className="font-heading font-bold text-xl text-foreground flex-1">{page.title}</h3>
+          )}
 
           {/* Edit/Delete buttons for owners */}
           {isOwner && (

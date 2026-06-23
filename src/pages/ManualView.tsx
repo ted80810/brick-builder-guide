@@ -511,10 +511,27 @@ const ManualView = () => {
 
           <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }}>
             {/* Cover / header */}
-            <h1 className="text-3xl md:text-4xl font-heading font-bold text-foreground mb-2">
-              {manual.title}
-            </h1>
-            <p className="text-muted-foreground mb-4">{manual.description}</p>
+            {reviewMode && isOwner ? (
+              <div className="space-y-2 mb-4">
+                <Input
+                  value={manual.title}
+                  onChange={(e) => { setManual(prev => prev ? { ...prev, title: e.target.value } : prev); setDirty(true); }}
+                  className="text-2xl md:text-3xl font-heading font-bold h-auto py-2"
+                />
+                <Textarea
+                  value={manual.description}
+                  onChange={(e) => { setManual(prev => prev ? { ...prev, description: e.target.value } : prev); setDirty(true); }}
+                  rows={2}
+                />
+              </div>
+            ) : (
+              <>
+                <h1 className="text-3xl md:text-4xl font-heading font-bold text-foreground mb-2">
+                  {manual.title}
+                </h1>
+                <p className="text-muted-foreground mb-4">{manual.description}</p>
+              </>
+            )}
 
             {/* Meta badges */}
             {manual.content && (

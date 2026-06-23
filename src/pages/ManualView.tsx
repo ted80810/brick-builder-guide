@@ -5,7 +5,8 @@ import Navbar from "@/components/Navbar";
 import Footer from "@/components/Footer";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
-import { Download, ArrowLeft, Loader2, RefreshCw, Share2, Shuffle, Copy, Check, Pencil, Trash2, Plus, X } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Download, ArrowLeft, Loader2, RefreshCw, Share2, Shuffle, Copy, Check, Pencil, Trash2, Plus, X, Eye, ZoomIn, ZoomOut, Save } from "lucide-react";
 import { motion } from "framer-motion";
 import { useToast } from "@/hooks/use-toast";
 

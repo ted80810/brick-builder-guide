@@ -808,7 +808,16 @@ const ManualView = () => {
           </Button>
         )}
 
-        <p className="text-foreground leading-relaxed mb-4">{page.instructions}</p>
+        {reviewMode && isOwner ? (
+          <Textarea
+            value={page.instructions}
+            onChange={(e) => updatePageField(page.pageNumber, "instructions", e.target.value)}
+            rows={4}
+            className="mb-4"
+          />
+        ) : (
+          <p className="text-foreground leading-relaxed mb-4 whitespace-pre-wrap">{page.instructions}</p>
+        )}
 
         <div className="bg-muted rounded-xl p-4 mb-3">
           <h4 className="font-heading font-semibold text-sm text-foreground mb-2">🔧 Parts Needed:</h4>
